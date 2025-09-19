@@ -18,17 +18,43 @@ import (
 * the Kafka topic.
  */
 func SubscribeStreams() {
-	response, err := XrplClient.Subscribe([]string{
-		xrpl.StreamTypeLedger,
-		xrpl.StreamTypeValidations,
-	})
-	if err != nil {
-		logger.Log.Error().Err(err).Msg("xrpl.Subscribe")
-	}
-	if response["status"].(string) == "error" {
-		logger.Log.Error().Any("error", response["error"]).Any("id", response["id"]).Any("error_message", response["error_message"]).Msg("xrpl.Subscribe")
-	} else {
-		logger.Log.Debug().Any("status", response["status"]).Any("id", response["id"]).Any("result", response["result"]).Msg("xrpl.Subscribe")
+	// Retry subscribe with exponential backoff until successful
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+
+	for {
+		if XrplClient == nil {
+			logger.Log.Warn().Dur("retry_in", backoff).Msg("XRPL client not initialized; waiting before subscribing")
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
+		}
+
+		response, err := XrplClient.Subscribe([]string{
+			xrpl.StreamTypeLedger,
+			xrpl.StreamTypeValidations,
+		})
+		if err != nil {
+			logger.Log.Warn().Dur("retry_in", backoff).Err(err).Msg("xrpl.Subscribe failed; retrying")
+		} else if status, ok := response["status"].(string); ok && status == "error" {
+			logger.Log.Warn().Dur("retry_in", backoff).Any("error", response["error"]).Any("id", response["id"]).Any("error_message", response["error_message"]).Msg("xrpl.Subscribe returned error; retrying")
+		} else {
+			logger.Log.Info().Any("status", response["status"]).Any("id", response["id"]).Msg("xrpl.Subscribe successful")
+			return
+		}
+
+		time.Sleep(backoff)
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
 	}
 }
 
