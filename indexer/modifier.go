@@ -78,9 +78,7 @@ func ModifyTransaction(tx map[string]interface{}) (map[string]interface{}, error
 	// Modify Amount-like fields in meta
 	meta, ok := tx["meta"].(map[string]interface{})
 	if ok {
-		// For simplicity, AffectedNodes field is dropped. This field may indexed
-		// in a future release after due consideration.
-		delete(meta, "AffectedNodes")
+		// Keep AffectedNodes as-is; mapping will store it as non-indexed object
 		modifyAmount(meta, models.DeliveredAmount.String(), ctid, network)
 		modifyAmount(meta, models.Delivered_Amount.String(), ctid, network)
 		tx["meta"] = meta

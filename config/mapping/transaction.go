@@ -345,6 +345,10 @@ func transactionMapping() string {
 			"ledger_index": { "type": "long" },
 			"meta": {
 				"properties": {
+					"AffectedNodes": {
+						"type": "object",
+						"enabled": false
+					},
 					"DeliveredAmount": {
 						"properties": {
 							"currency": { "type": "keyword" },
