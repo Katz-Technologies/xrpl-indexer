@@ -4,38 +4,35 @@ CREATE DATABASE IF NOT EXISTS xrpl;
 -- Kafka engines (raw topics)
 CREATE TABLE IF NOT EXISTS xrpl.tx_kafka
 (
-  `key` String,
   `value` String
 )
 ENGINE = Kafka
 SETTINGS kafka_broker_list = 'kafka-broker1:29092',
          kafka_topic_list = 'xrpl-platform-transactions-processed',
          kafka_group_name = 'clickhouse-tx',
-         kafka_format = 'JSONEachRow',
+         kafka_format = 'RawBLOB',
          kafka_num_consumers = 4;
 
 CREATE TABLE IF NOT EXISTS xrpl.ledger_kafka
 (
-  `key` String,
   `value` String
 )
 ENGINE = Kafka
 SETTINGS kafka_broker_list = 'kafka-broker1:29092',
          kafka_topic_list = 'xrpl-platform-ledgers',
          kafka_group_name = 'clickhouse-ledger',
-         kafka_format = 'JSONEachRow',
+         kafka_format = 'RawBLOB',
          kafka_num_consumers = 2;
 
 CREATE TABLE IF NOT EXISTS xrpl.validation_kafka
 (
-  `key` String,
   `value` String
 )
 ENGINE = Kafka
 SETTINGS kafka_broker_list = 'kafka-broker1:29092',
          kafka_topic_list = 'xrpl-platform-validations',
          kafka_group_name = 'clickhouse-validation',
-         kafka_format = 'JSONEachRow',
+         kafka_format = 'RawBLOB',
          kafka_num_consumers = 2;
 
 -- Target tables (MergeTree)
@@ -86,8 +83,8 @@ TO xrpl.tx AS
 SELECT
   JSONExtractString(value, 'hash') AS hash,
   toUInt32(JSONExtract(value, 'ledger_index', 'Int64')) AS ledger_index,
-  toDateTime64(JSONExtract(value, 'date', 'Float64'), 3, 'UTC') AS date,
-  toUInt8(JSONExtract(value, 'validated', 'UInt8')) AS validated,
+  toDateTime64(JSONExtract(value, 'date', 'Float64') + 946684800, 3, 'UTC') AS date,
+  toUInt8(JSONExtractBool(value, 'validated')) AS validated,
   JSONExtractString(value, 'TransactionType') AS tx_type,
   JSONExtractString(value, 'Account') AS account,
   JSONExtractString(value, 'Destination') AS destination,
@@ -98,7 +95,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS xrpl.ledger_mv
 TO xrpl.ledger AS
 SELECT
   toUInt32(JSONExtract(value, 'ledger_index', 'Int64')) AS ledger_index,
-  toDateTime64(JSONExtract(value, 'close_time', 'Float64'), 3, 'UTC') AS close_time,
+  toDateTime64(JSONExtract(value, 'close_time', 'Float64') + 946684800, 3, 'UTC') AS close_time,
   toUInt32(JSONExtract(value, 'txn_count', 'Int64')) AS txn_count,
   value AS raw_json
 FROM xrpl.ledger_kafka;

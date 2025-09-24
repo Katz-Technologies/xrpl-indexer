@@ -72,12 +72,16 @@ func RunProducers() {
 
 // backfillMissingRange replays missing ledgers by reusing the backfill producer flow
 func backfillMissingRange(from int, to int) {
+	if to < from {
+		return
+	}
+	logger.Log.Info().Int("from", from).Int("to", to).Int("count", to-from+1).Msg("Backfilling missing ledger range")
 	for i := from; i <= to; i++ {
 		ledger := models.LedgerStream{Type: models.LEDGER_STREAM_TYPE, LedgerIndex: uint32(i)}
 		b, _ := json.Marshal(ledger)
 		// Produce ledger and transactions in order
-		ProduceLedger(connections.KafkaWriter, b)
-		ProduceTransactions(connections.KafkaWriter, b)
+		go ProduceLedger(connections.KafkaWriter, b)
+		go ProduceTransactions(connections.KafkaWriter, b)
 	}
 }
 

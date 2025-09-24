@@ -2,6 +2,7 @@ package connections
 
 import (
 	"sync"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 	"github.com/xrpscan/platform/config"
@@ -14,10 +15,27 @@ var wOnce sync.Once
 // specify the Topic where it must be written to.
 func NewWriter() {
 	wOnce.Do(func() {
+		// Configure batching and delivery semantics from env
+		batchTimeout := time.Duration(config.EnvKafkaWriterBatchTimeoutMs()) * time.Millisecond
+		requiredAcks := kafka.RequireOne
+		switch config.EnvKafkaWriterRequiredAcks() {
+		case -1:
+			requiredAcks = kafka.RequireAll
+		case 0:
+			requiredAcks = kafka.RequireNone
+		case 1:
+			requiredAcks = kafka.RequireOne
+		}
+
 		KafkaWriter = &kafka.Writer{
-			Addr:     kafka.TCP(config.EnvKafkaBootstrapServer()),
-			Balancer: &kafka.LeastBytes{},
-			Async:    true,
+			Addr:                   kafka.TCP(config.EnvKafkaBootstrapServer()),
+			Balancer:               &kafka.LeastBytes{},
+			Async:                  true,
+			BatchSize:              config.EnvKafkaWriterBatchSize(),
+			BatchBytes:             int64(config.EnvKafkaWriterBatchBytes()),
+			BatchTimeout:           batchTimeout,
+			RequiredAcks:           requiredAcks,
+			AllowAutoTopicCreation: true,
 		}
 	})
 }
