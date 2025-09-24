@@ -74,6 +74,7 @@ openssl x509 -fingerprint -sha256 -noout -in /etc/elasticsearch/certs/http_ca.cr
 ```
 docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-ledgers
 docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-transactions
+docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-transactions-processed
 docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-validations
 docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-manifests
 docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-peerstatus

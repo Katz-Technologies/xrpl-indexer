@@ -1,12 +1,14 @@
 package consumers
 
 import (
-	"context"
+    "context"
+    "encoding/json"
 
-	"github.com/segmentio/kafka-go"
-	"github.com/xrpscan/platform/connections"
-	"github.com/xrpscan/platform/indexer"
-	"github.com/xrpscan/platform/logger"
+    "github.com/segmentio/kafka-go"
+    "github.com/xrpscan/platform/config"
+    "github.com/xrpscan/platform/connections"
+    "github.com/xrpscan/platform/indexer"
+    "github.com/xrpscan/platform/logger"
 )
 
 // Serial consumer (based on callback function) for low volume message streams
@@ -47,9 +49,8 @@ func RunBulkConsumer(conn *kafka.Reader, callback func(<-chan kafka.Message)) {
 
 // Run all consumers
 func RunConsumers() {
-	go RunBulkConsumer(connections.KafkaReaderLedger, indexer.BulkIndexLedger)
-	go RunBulkConsumer(connections.KafkaReaderValidation, indexer.BulkIndexValidation)
-	go RunBulkConsumer(connections.KafkaReaderTransaction, indexer.BulkIndexTransaction)
+	// ClickHouse Kafka Engine consumes ledgers/transactions/validations directly.
+	// Disabling Go bulk consumers for these topics.
 
 	go RunConsumer(connections.KafkaReaderPeerStatus, indexer.PrintMessage)
 	go RunConsumer(connections.KafkaReaderConsensus, indexer.PrintMessage)
@@ -57,4 +58,35 @@ func RunConsumers() {
 	go RunConsumer(connections.KafkaReaderManifest, indexer.PrintMessage)
 	go RunConsumer(connections.KafkaReaderServer, indexer.PrintMessage)
 	go RunConsumer(connections.KafkaReaderDefault, indexer.PrintMessage)
+
+    // Transformer for transactions: keep previous ModifyTransaction logic and forward to processed topic
+    go RunBulkConsumer(connections.KafkaReaderTransaction, func(ch <-chan kafka.Message) {
+        ctx := context.Background()
+        for {
+            m := <-ch
+            var tx map[string]interface{}
+            if err := json.Unmarshal(m.Value, &tx); err != nil {
+                logger.Log.Error().Err(err).Msg("Transaction json.Unmarshal error")
+                continue
+            }
+            modified, err := indexer.ModifyTransaction(tx)
+            if err != nil {
+                logger.Log.Error().Err(err).Msg("Error fixing transaction object")
+                continue
+            }
+            b, err := json.Marshal(modified)
+            if err != nil {
+                logger.Log.Error().Err(err).Msg("Transaction json.Marshal error")
+                continue
+            }
+            // Forward to processed topic, using same key
+            if err := connections.KafkaWriter.WriteMessages(ctx, kafka.Message{
+                Topic: config.TopicTransactionsProcessed(),
+                Key:   m.Key,
+                Value: b,
+            }); err != nil {
+                logger.Log.Error().Err(err).Msg("Failed to write processed tx")
+            }
+        }
+    })
 }

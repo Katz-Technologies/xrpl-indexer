@@ -76,7 +76,9 @@ func (ledger *LedgerStream) FetchTransactions() (xrpl.BaseResponse, error) {
 		"transactions": true,
 		"expand":       true,
 	}
-	response, err := connections.XrplClient.Request(request)
+	// Prefer RPC client to avoid contention with streaming client
+	client := connections.GetXRPLRequestClient()
+	response, err := client.Request(request)
 	if err != nil {
 		return nil, err
 	}

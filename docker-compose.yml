@@ -27,7 +27,9 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://broker:29092
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka-broker1:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -36,27 +38,44 @@ services:
         limits:
           memory: ${KAFKA_BROKER_MEMORY_LIMIT}
 
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:9.1.3
-    container_name: elasticsearch
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse
     environment:
-      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
-      xpack.security.enabled: false
-      ELASTIC_PASSWORD: ${ELASTICSEARCH_PASSWORD}
-      cluster.name: ${ELASTICSEARCH_NAMESPACE}
-      discovery.type: single-node
+      CLICKHOUSE_DB: xrpl
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
     ports:
-      - "9200:9200"
+      - "9000:9000"   # native
+      - "8123:8123"   # http
     volumes:
-      - elasticsearch-data:/usr/share/elasticsearch/data
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query='SELECT 1'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+    links:
+      - kafka-broker1:broker
+      
 
-  kibana:
-    image: docker.elastic.co/kibana/kibana:9.1.3
-    container_name: kibana
+  clickhouse-init:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse-init
     depends_on:
-      - elasticsearch
-    ports:
-      - "5601:5601"
+      clickhouse:
+        condition: service_healthy
+      kafka-broker1:
+        condition: service_started
+    volumes:
+      - ./clickhouse/ddl:/ddl:ro
+    entrypoint: /bin/sh
+    command: -c "for f in /ddl/*.sql; do echo Running $$f; clickhouse-client --host clickhouse --multiquery < $$f; done"
+    restart: "no"
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -82,5 +101,5 @@ volumes:
     driver: local
   kafka-data:
     driver: local
-  elasticsearch-data:
+  clickhouse-data:
     driver: local

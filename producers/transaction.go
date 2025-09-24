@@ -69,7 +69,8 @@ func ProduceTransactions(w *kafka.Writer, message []byte) {
 		return
 	}
 
-	// Iterate over transactions slice and submit each transaction to Kafka topic
+	// Build a batch of kafka messages and write in one call
+	msgs := make([]kafka.Message, 0, len(txs))
 	for _, txo := range txs {
 		tx, ok := txo.(map[string]interface{})
 		if !ok {
@@ -83,12 +84,29 @@ func ProduceTransactions(w *kafka.Writer, message []byte) {
 		tx["date"] = closeTime
 		tx["validated"] = true
 
+		var base xrpl.BaseResponse = tx
+		hash, _ := base["hash"].(string)
+		if hash == "" {
+			// Skip malformed tx
+			continue
+		}
+
 		txJSON, err := json.Marshal(tx)
 		if err != nil {
 			logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Err(err).Msg("Error Marshaling transaction")
 			return
 		}
-		ProduceTransaction(w, txJSON)
+		msgs = append(msgs, kafka.Message{
+			Topic: config.TopicTransactions(),
+			Key:   []byte(hash),
+			Value: txJSON,
+		})
+	}
+
+	if len(msgs) > 0 {
+		if err := w.WriteMessages(context.Background(), msgs...); err != nil {
+			logger.Log.Trace().Err(err).Msg("Failed to produce transaction batch")
+		}
 	}
 }
 

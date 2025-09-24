@@ -12,6 +12,11 @@ func TopicTransactions() string {
 	return fmt.Sprintf("%s-transactions", EnvKafkaTopicNamespace())
 }
 
+// Kafka topic for processed transactions (after ModifyTransaction)
+func TopicTransactionsProcessed() string {
+    return fmt.Sprintf("%s-transactions-processed", EnvKafkaTopicNamespace())
+}
+
 // Kafka topic for streaming xrpl.StreamTypeValidations messages
 func TopicValidations() string {
 	return fmt.Sprintf("%s-validations", EnvKafkaTopicNamespace())

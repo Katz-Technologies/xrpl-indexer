@@ -129,46 +129,61 @@ func CloseXrplClient() {
 	})
 }
 
+func CloseXrplRPCClient() {
+	closeWithTimeout("XRPL RPC client", func() error {
+		if XrplRPCClient != nil {
+			return XrplRPCClient.Close()
+		}
+		return nil
+	})
+}
+
 func CloseAll() {
 	log.Println("Closing all connections")
-	
+
 	// First unsubscribe from streams
 	UnsubscribeStreams()
-	
+
 	// Close other connections in parallel
 	var wg sync.WaitGroup
-	
+
 	// Close writer
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		CloseWriter()
 	}()
-	
+
 	// Close readers (already parallel internally)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		CloseReaders()
 	}()
-	
+
 	// Close XRPL client
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		CloseXrplClient()
 	}()
-	
+	// Close XRPL RPC client
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		CloseXrplRPCClient()
+	}()
+
 	// Close ES client (currently no-op)
 	CloseEsClient()
-	
+
 	// Wait for all closures with overall timeout
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
 		close(done)
 	}()
-	
+
 	select {
 	case <-done:
 		log.Println("All connections closed successfully")

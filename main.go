@@ -19,10 +19,11 @@ func main() {
 
 	connections.NewWriter()
 	connections.NewReaders()
-	connections.NewEsClient()
 	connections.NewXrplClient()
+	connections.NewXrplRPCClient()
 
 	go connections.SubscribeStreams()
+	go connections.MonitorXRPLConnection()
 	go producers.RunProducers()
 	go consumers.RunConsumers()
 
