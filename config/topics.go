@@ -14,7 +14,7 @@ func TopicTransactions() string {
 
 // Kafka topic for processed transactions (after ModifyTransaction)
 func TopicTransactionsProcessed() string {
-    return fmt.Sprintf("%s-transactions-processed", EnvKafkaTopicNamespace())
+	return fmt.Sprintf("%s-transactions-processed", EnvKafkaTopicNamespace())
 }
 
 // Kafka topic for streaming xrpl.StreamTypeValidations messages
@@ -50,4 +50,24 @@ func TopicServer() string {
 // Kafka topic for streaming messages that do not match any StreamType*
 func TopicDefault() string {
 	return fmt.Sprintf("%s-default", EnvKafkaTopicNamespace())
+}
+
+// =====================
+// ClickHouse row topics
+// =====================
+
+func TopicCHTransactions() string {
+	return fmt.Sprintf("%s-ch-transactions", EnvKafkaTopicNamespace())
+}
+
+func TopicCHAccounts() string {
+	return fmt.Sprintf("%s-ch-accounts", EnvKafkaTopicNamespace())
+}
+
+func TopicCHAssets() string {
+	return fmt.Sprintf("%s-ch-assets", EnvKafkaTopicNamespace())
+}
+
+func TopicCHMoneyFlows() string {
+	return fmt.Sprintf("%s-ch-moneyflows", EnvKafkaTopicNamespace())
 }

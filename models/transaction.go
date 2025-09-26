@@ -316,3 +316,40 @@ type Transaction struct {
 	Expiration     uint32 `json:"Expiration,omitempty"`
 	OfferSequence  uint32 `json:"OfferSequence,omitempty"`
 }
+
+// Row payloads for ClickHouse ingestion
+type CHTransactionRow struct {
+	TxID          string `json:"tx_id"`
+	Hash          string `json:"hash"`
+	LedgerIndex   uint32 `json:"ledger_index"`
+	CloseTimeUnix int64  `json:"close_time_unix"`
+	TxType        string `json:"tx_type"`
+	AccountID     string `json:"account_id"`
+	DestinationID string `json:"destination_id"`
+	Result        string `json:"result"`
+	FeeDrops      uint64 `json:"fee_drops"`
+	RawJSON       string `json:"raw_json"`
+}
+
+type CHAccountRow struct {
+	AccountID string `json:"account_id"`
+	Address   string `json:"address"`
+}
+
+type CHAssetRow struct {
+	AssetID   string `json:"asset_id"`
+	AssetType string `json:"asset_type"`
+	Currency  string `json:"currency"`
+	IssuerID  string `json:"issuer_id"`
+	Symbol    string `json:"symbol"`
+}
+
+type CHMoneyFlowRow struct {
+	TxID     string `json:"tx_id"`
+	FromID   string `json:"from_id"`
+	ToID     string `json:"to_id"`
+	AssetID  string `json:"asset_id"`
+	Amount   string `json:"amount"`
+	QuoteXRP string `json:"quote_xrp"`
+	Kind     string `json:"kind"`
+}
