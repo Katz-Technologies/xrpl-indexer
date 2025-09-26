@@ -111,34 +111,4 @@ func EnvKafkaWriterRequiredAcks() int {
 	return 1 // leader-only default
 }
 
-/*
-* Elasticsearch settings
- */
-
-func EnvEsNamespace() string {
-	return os.Getenv("ELASTICSEARCH_NAMESPACE")
-}
-
-func EnvEsURL() string {
-	return os.Getenv("ELASTICSEARCH_URL")
-}
-
-func EnvEsUsername() string {
-	return os.Getenv("ELASTICSEARCH_USERNAME")
-}
-
-func EnvEsPassword() string {
-	return os.Getenv("ELASTICSEARCH_PASSWORD")
-}
-
-func EnvEsFingerprint() string {
-	return os.Getenv("ELASTICSEARCH_FINGERPRINT")
-}
-
-func EnvEsFlushInterval() int {
-	esFlushInterval, err := strconv.Atoi(os.Getenv("ELASTICSEARCH_FLUSH_INTERVAL"))
-	if err != nil {
-		return 5
-	}
-	return esFlushInterval
-}
+// Removed: Elasticsearch settings are no longer used

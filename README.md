@@ -9,7 +9,7 @@ XRP Ledger exploration tools and APIs available today, such as rippled, clio and
 1. [Apache Kafka](https://kafka.apache.org)
 2. [rippled](https://xrpl.org/install-rippled.html)
 3. Access to full history rippled (if backfilling older ledgers)
-4. [Elasticsearch](https://www.elastic.co/downloads/elasticsearch)
+4. ClickHouse (see docker-compose)
 
 ### Architecture
 
@@ -20,35 +20,24 @@ XRP Ledger exploration tools and APIs available today, such as rippled, clio and
 1. This project is known to run on Linux and macOS. This README lists out steps to
 run the service on CentOS.
 
-2. Install Elasticsearch via this guide: https://www.elastic.co/guide/en/elasticsearch/reference/current/rpm.html
+2. Install Docker via this guide: https://docs.docker.com/engine/install/centos/
 
-```
-dnf install --enablerepo=elasticsearch elasticsearch
-systemctl daemon-reload
-systemctl enable elasticsearch.service
-systemctl start elasticsearch.service
-```
-Elasticsearch default installer would print the instance's defauly password. This
-password must be noted as it would be required in the later steps (`ELASTICSEARCH_PASSWORD`).
-
-3. Install Docker via this guide: https://docs.docker.com/engine/install/centos/
-
-4. Configure Docker to run as non-root
+3. Configure Docker to run as non-root
 
 ```
 usermod -aG docker non-root-user
 systemctl restart docker
 ```
 
-5. Install Zookeeper and Kafka
+4. Install Zookeeper and Kafka
 
 ```
 docker compose up -d
 ```
 
-6. Install Go via this guide: https://go.dev/doc/install
+5. Install Go via this guide: https://go.dev/doc/install
 
-7. Build deep search platform
+6. Build deep search platform
 
 ```
 dnf install make
@@ -57,19 +46,15 @@ cd platform
 make
 ```
 
-8. Create environment file and update settings within
+7. Create environment file and update settings within
 
 ```
 cp .env.example .env
 ```
 
-9. Copy fingerprint output from the following command into .env file. `ELASTICSEARCH_FINGERPRINT="xxxxxx"`
+8. Start ClickHouse and dependencies via docker-compose
 
-```
-openssl x509 -fingerprint -sha256 -noout -in /etc/elasticsearch/certs/http_ca.crt | sed s/://g
-```
-
-10. Create Kafka topics
+9. Create Kafka topics
 
 ```
 docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-ledgers
@@ -84,11 +69,7 @@ docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --c
 docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-tx
 ```
 
-11. Create Elasticsearch indexes
-
-```
-./bin/platform-cli init -elasticsearch -shards 8 -replicas 0
-```
+10. ClickHouse DDL is auto-applied by docker-compose `clickhouse-init` service
 
 ### Running the service
 
@@ -105,36 +86,17 @@ docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --c
 ```
 
 ### Monitoring the service
-The services ships a command named `eps` that may be used to print Elasticsearch
-index statistics. Open file `cmd/eps/eps` and update `ES_ENV_FILE` variable so
-that it points to your platform `.env` file.
-
-```
-vi cmd/eps/eps  # Update ES_ENV_FILE variable
-cp cmd/eps/eps /path/to/your/bin
-eps
-```
+Use `kafka-ui` (included in docker-compose) to inspect topics and messages.
 
 ### Querying data
-Deep search platform will provide easy to use APIs for querying XRPL transaction
-data in a future release. For now, data can be queried by connecting to Elasticsearch
-directly
+Data is written only to ClickHouse tables. Query via HTTP:
 
 ```
-source .env
-curl -k -u elastic:$ELASTICSEARCH_PASSWORD \
--H 'Content-type: application/json' \
--XPOST 'https://localhost:9200/platform.transactions/_search' \
--d '{"query":{"term":{"ctid":"C511CC0400850000" }}}' | \
-jq .hits
+curl 'http://localhost:8123/?query=SELECT%20count()%20FROM%20xrpl.tx'
 ```
 
 ### Maintenance
-Over time, XRPL protocol may receive updates via the [amendment](https://xrpscan.com/amendments) process. New amendments may add additional fields to the transaction, ledger or validation objects. When this happens, Elasticsearch index templates would need an update.
-
-```
-./bin/platform-cli init -elasticsearch -force
-```
+Over time, XRPL protocol may receive updates via the [amendment](https://xrpscan.com/amendments) process. Transformer logic in `indexer/modifier.go` normalizes key fields.
 
 ### References
 [Ledger Stream - xrpl.org](https://xrpl.org/subscribe.html#ledger-stream)
@@ -155,3 +117,11 @@ When a new amendment adds or removes fields from transaction object, review the 
 Please create a new issue in [Platform issue tracker](https://github.com/xrpscan/platform/issues)
 
 ### EOF
+
+docker-compose down -v 
+docker-compose up -d
+docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-transactions
+docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-transactions-processed
+go build -o .\bin\platform-server.exe . 
+go build -o .\bin\platform-cli.exe .\cmd\cli
+.\bin\platform-server.exe

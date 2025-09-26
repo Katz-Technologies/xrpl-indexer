@@ -5,18 +5,16 @@ go 1.21
 toolchain go1.21.0
 
 require (
-	github.com/elastic/go-elasticsearch/v8 v8.14.0
-	github.com/google/uuid v1.6.0
-	github.com/joho/godotenv v1.5.1
-	github.com/labstack/echo/v4 v4.12.0
-	github.com/rs/zerolog v1.33.0
-	github.com/segmentio/kafka-go v0.4.47
-	github.com/xrpscan/xrpl-go v0.2.10
+    github.com/google/uuid v1.6.0
+    github.com/joho/godotenv v1.5.1
+    github.com/labstack/echo/v4 v4.12.0
+    github.com/rs/zerolog v1.33.0
+    github.com/segmentio/kafka-go v0.4.47
+    github.com/xrpscan/xrpl-go v0.2.10
 )
 
 require (
-	github.com/elastic/elastic-transport-go/v8 v8.6.0 // indirect
-	github.com/go-logr/logr v1.4.1 // indirect
+    github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/gorilla/websocket v1.5.1 // indirect
 	github.com/klauspost/compress v1.17.4 // indirect

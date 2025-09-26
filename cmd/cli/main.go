@@ -23,7 +23,6 @@ func root(args []string) error {
 
 	cmds := []Runner{
 		NewBackfillCommand(),
-		NewInitCommand(),
 	}
 
 	for _, cmd := range cmds {

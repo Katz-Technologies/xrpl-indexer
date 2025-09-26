@@ -3,7 +3,6 @@ package producers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"sync/atomic"
 
@@ -41,31 +40,23 @@ func RunProducers() {
 				logger.Log.Info().Msg("New ledger message")
 			}
 
-			// Run producers asynchronously to avoid blocking the stream loop
-			go ProduceLedger(connections.KafkaWriter, ledger)
+			// Only produce transactions to avoid creating extra topics
 			go ProduceTransactions(connections.KafkaWriter, ledger)
 
-		case validation := <-connections.XrplClient.StreamValidation:
-			go ProduceValidation(connections.KafkaWriter, validation)
-
-		case peerStatus := <-connections.XrplClient.StreamPeerStatus:
-			Produce(connections.KafkaWriter, peerStatus, config.TopicPeerStatus())
-
-		case consensus := <-connections.XrplClient.StreamConsensus:
-			Produce(connections.KafkaWriter, consensus, config.TopicConsensus())
-
-		case pathFind := <-connections.XrplClient.StreamPathFind:
-			Produce(connections.KafkaWriter, pathFind, config.TopicPathFind())
-
-		case manifest := <-connections.XrplClient.StreamManifest:
-			Produce(connections.KafkaWriter, manifest, config.TopicManifests())
-
-		case server := <-connections.XrplClient.StreamServer:
-			Produce(connections.KafkaWriter, server, config.TopicServer())
-
-		case defaultObject := <-connections.XrplClient.StreamDefault:
-			fmt.Println(string(defaultObject))
-			Produce(connections.KafkaWriter, defaultObject, config.TopicDefault())
+		case <-connections.XrplClient.StreamValidation:
+			// ignore
+		case <-connections.XrplClient.StreamPeerStatus:
+			// ignore
+		case <-connections.XrplClient.StreamConsensus:
+			// ignore
+		case <-connections.XrplClient.StreamPathFind:
+			// ignore
+		case <-connections.XrplClient.StreamManifest:
+			// ignore
+		case <-connections.XrplClient.StreamServer:
+			// ignore
+		case <-connections.XrplClient.StreamDefault:
+			// ignore
 		}
 	}
 }

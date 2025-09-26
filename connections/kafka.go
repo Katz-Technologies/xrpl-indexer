@@ -157,13 +157,5 @@ func NewDefaultReader() {
 }
 
 func NewReaders() {
-	NewLedgerReader()
 	NewTransactionReader()
-	NewValidationReader()
-	NewPeerStatusReader()
-	NewConsensusReader()
-	NewPathFindReader()
-	NewManifestReader()
-	NewServerReader()
-	NewDefaultReader()
 }

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/segmentio/kafka-go"
 	"github.com/xrpscan/platform/shutdown"
 )
 
@@ -71,10 +72,10 @@ func CloseWriter() {
 }
 
 func CloseReaders() {
-	// Define all readers to close with their names
+	// Define all readers explicitly as pointers to detect typed-nil correctly
 	readers := []struct {
 		name   string
-		reader interface{ Close() error }
+		reader *kafka.Reader
 	}{
 		{"Kafka Ledger reader", KafkaReaderLedger},
 		{"Kafka Transaction reader", KafkaReaderTransaction},
@@ -92,7 +93,7 @@ func CloseReaders() {
 	for _, r := range readers {
 		if r.reader != nil {
 			wg.Add(1)
-			go func(name string, reader interface{ Close() error }) {
+			go func(name string, reader *kafka.Reader) {
 				defer wg.Done()
 				closeWithTimeout(name, func() error {
 					return reader.Close()
