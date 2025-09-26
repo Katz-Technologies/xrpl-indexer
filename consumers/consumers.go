@@ -476,43 +476,15 @@ func RunConsumers() {
 						}
 					}
 
-					totalXrp := decimal.Zero
-					totalIou := decimal.Zero
+					// Index edges by directed pair to allow cross-asset pairing
+					edgesByPair := make(map[string][]edge)
+					pairKey := func(a, b string) string { return a + "|" + b }
 					for _, e := range edges {
-						if e.asset.currency == "XRP" {
-							if e.amount.IsNegative() {
-								totalXrp = totalXrp.Add(e.amount.Neg())
-							} else {
-								totalXrp = totalXrp.Add(e.amount)
-							}
-						} else {
-							if e.amount.IsNegative() {
-								totalIou = totalIou.Add(e.amount.Neg())
-							} else {
-								totalIou = totalIou.Add(e.amount)
-							}
-						}
-					}
-					rate := decimal.Zero
-					if !totalIou.IsZero() {
-						rate = totalXrp.Div(totalIou)
+						k := pairKey(e.from, e.to)
+						edgesByPair[k] = append(edgesByPair[k], e)
 					}
 
 					for _, e := range edges {
-						// positive valuation in XRP units (magnitude), independent of direction
-						quoteAbs := decimal.Zero
-						if e.asset.currency == "XRP" {
-							quoteAbs = e.amount
-							if quoteAbs.IsNegative() {
-								quoteAbs = quoteAbs.Neg()
-							}
-						} else if !rate.IsZero() {
-							q := e.amount
-							if q.IsNegative() {
-								q = q.Neg()
-							}
-							quoteAbs = q.Mul(rate)
-						}
 						kind := "transfer"
 						if (e.from == initiator || e.to == initiator) && seenAssetsForInitiator >= 2 {
 							kind = "swap"
@@ -522,13 +494,13 @@ func RunConsumers() {
 						// compute IDs
 						accFrom := idAccount(e.from)
 						accTo := idAccount(e.to)
-						var assetId string
+						var fromAssetId string
 						if e.asset.currency == "XRP" {
-							assetId = idAssetXRP()
+							fromAssetId = idAssetXRP()
 						} else {
-							assetId = idAssetIOU(normCurrency(e.asset.currency), e.asset.issuer)
+							fromAssetId = idAssetIOU(normCurrency(e.asset.currency), e.asset.issuer)
 						}
-						// receiver (credit, +amount); ensure positive magnitude
+						// magnitude for current edge
 						amtAbs := e.amount
 						if amtAbs.IsNegative() {
 							amtAbs = amtAbs.Neg()
@@ -536,13 +508,78 @@ func RunConsumers() {
 						if amtAbs.LessThan(epsilon) {
 							continue
 						}
-						mfRecv := models.CHMoneyFlowRow{TxID: txId, FromID: accFrom, ToID: accTo, AssetID: assetId, Amount: amtAbs.String(), QuoteXRP: quoteAbs.String(), Kind: kind}
-						if row, err := json.Marshal(mfRecv); err == nil {
+						// find reverse edge to determine counter-asset and amount
+						revList := edgesByPair[pairKey(e.to, e.from)]
+						var toAmt decimal.Decimal
+						var toAssetId string
+						for _, re := range revList {
+							if re.asset.currency != e.asset.currency || re.asset.issuer != e.asset.issuer {
+								toAmt = re.amount
+								if toAmt.IsNegative() {
+									toAmt = toAmt.Neg()
+								}
+								if re.asset.currency == "XRP" {
+									toAssetId = idAssetXRP()
+								} else {
+									toAssetId = idAssetIOU(normCurrency(re.asset.currency), re.asset.issuer)
+								}
+								break
+							}
+						}
+						if toAssetId == "" {
+							if len(revList) > 0 {
+								re := revList[0]
+								toAmt = re.amount
+								if toAmt.IsNegative() {
+									toAmt = toAmt.Neg()
+								}
+								if re.asset.currency == "XRP" {
+									toAssetId = idAssetXRP()
+								} else {
+									toAssetId = idAssetIOU(normCurrency(re.asset.currency), re.asset.issuer)
+								}
+							} else {
+								// no reverse edge: treat as same-asset transfer
+								toAssetId = fromAssetId
+								toAmt = amtAbs
+							}
+						}
+						quote := decimal.Zero
+						if !amtAbs.IsZero() {
+							quote = toAmt.Div(amtAbs)
+						}
+						// sender (debit): from -> to
+						mfSend := models.CHMoneyFlowRow{
+							TxID:        txId,
+							FromID:      accFrom,
+							ToID:        accTo,
+							FromAssetID: fromAssetId,
+							ToAssetID:   toAssetId,
+							FromAmount:  amtAbs.Neg().String(),
+							ToAmount:    toAmt.String(),
+							Quote:       quote.String(),
+							Kind:        kind,
+						}
+						if row, err := json.Marshal(mfSend); err == nil {
 							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHMoneyFlows(), Key: []byte(hash), Value: row})
 						}
-						// sender (debit, -amount)
-						mfSend := models.CHMoneyFlowRow{TxID: txId, FromID: accFrom, ToID: accTo, AssetID: assetId, Amount: amtAbs.Neg().String(), QuoteXRP: quoteAbs.String(), Kind: kind}
-						if row, err := json.Marshal(mfSend); err == nil {
+						// receiver (credit): flip direction and swap asset/amounts
+						quoteInv := decimal.Zero
+						if !toAmt.IsZero() {
+							quoteInv = amtAbs.Div(toAmt)
+						}
+						mfRecv := models.CHMoneyFlowRow{
+							TxID:        txId,
+							FromID:      accTo,
+							ToID:        accFrom,
+							FromAssetID: toAssetId,
+							ToAssetID:   fromAssetId,
+							FromAmount:  toAmt.Neg().String(),
+							ToAmount:    amtAbs.String(),
+							Quote:       quoteInv.String(),
+							Kind:        kind,
+						}
+						if row, err := json.Marshal(mfRecv); err == nil {
 							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHMoneyFlows(), Key: []byte(hash), Value: row})
 						}
 					}

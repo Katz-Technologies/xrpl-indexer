@@ -345,11 +345,16 @@ type CHAssetRow struct {
 }
 
 type CHMoneyFlowRow struct {
-	TxID     string `json:"tx_id"`
-	FromID   string `json:"from_id"`
-	ToID     string `json:"to_id"`
-	AssetID  string `json:"asset_id"`
-	Amount   string `json:"amount"`
-	QuoteXRP string `json:"quote_xrp"`
-	Kind     string `json:"kind"`
+	TxID    string `json:"tx_id"`
+	FromID  string `json:"from_id"`
+	ToID    string `json:"to_id"`
+	AssetID string `json:"asset_id"`
+	Amount  string `json:"amount"`
+	// New enriched fields for cross-asset accounting
+	FromAssetID string `json:"from_asset_id"`
+	ToAssetID   string `json:"to_asset_id"`
+	FromAmount  string `json:"from_amount"`
+	ToAmount    string `json:"to_amount"`
+	Quote       string `json:"quote"`
+	Kind        string `json:"kind"`
 }

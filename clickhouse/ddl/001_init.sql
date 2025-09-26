@@ -57,13 +57,15 @@ CREATE TABLE IF NOT EXISTS xrpl.money_flow
   tx_id UUID,
   from_id UUID,
   to_id UUID,
-  asset_id UUID,
-  amount Decimal(38, 18),            -- sent amount in asset units
-  quote_xrp Decimal(38, 18),         -- quote of the send in XRP
+  from_asset_id UUID,
+  to_asset_id UUID,
+  from_amount Decimal(38, 18),
+  to_amount Decimal(38, 18),
+  quote Decimal(38, 18),
   kind Enum8('transfer' = 0, 'dexOffer' = 1, 'swap' = 2)
 )
 ENGINE = ReplacingMergeTree
-ORDER BY (tx_id, from_id, to_id, asset_id, kind, amount);
+ORDER BY (tx_id, from_id, to_id, from_asset_id, to_asset_id, kind, from_amount);
 
 -- ==============================
 -- Kafka ingestion (final rows)
@@ -106,9 +108,11 @@ SELECT
   toUUID(JSONExtractString(value, 'tx_id')) AS tx_id,
   toUUID(JSONExtractString(value, 'from_id')) AS from_id,
   toUUID(JSONExtractString(value, 'to_id')) AS to_id,
-  toUUID(JSONExtractString(value, 'asset_id')) AS asset_id,
-  CAST(JSONExtractString(value, 'amount'), 'Decimal(38,18)') AS amount,
-  CAST(JSONExtractString(value, 'quote_xrp'), 'Decimal(38,18)') AS quote_xrp,
+  toUUID(JSONExtractString(value, 'from_asset_id')) AS from_asset_id,
+  toUUID(JSONExtractString(value, 'to_asset_id')) AS to_asset_id,
+  CAST(JSONExtractString(value, 'from_amount'), 'Decimal(38,18)') AS from_amount,
+  CAST(JSONExtractString(value, 'to_amount'), 'Decimal(38,18)') AS to_amount,
+  CAST(JSONExtractString(value, 'quote'), 'Decimal(38,18)') AS quote,
   CAST(JSONExtractString(value, 'kind'), 'Enum8(''transfer''=0,''dexOffer''=1,''swap''=2)') AS kind
 FROM xrpl.ch_moneyflows_kafka;
 
