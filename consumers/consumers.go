@@ -307,6 +307,13 @@ func RunConsumers() {
 				if nodes, ok := meta["AffectedNodes"].([]interface{}); ok {
 					// First pass: collect balance deltas (XRP and IOU) per account+asset
 					type assetKey struct{ currency, issuer string }
+					type offerPair struct {
+						owner string
+						gets  assetKey
+						pays  assetKey
+						quote decimal.Decimal // pays per gets
+					}
+					offersByOwner := make(map[string][]offerPair)
 					balances := make(map[string]map[assetKey]decimal.Decimal)
 					for _, n := range nodes {
 						node, _ := n.(map[string]interface{})
@@ -413,6 +420,82 @@ func RunConsumers() {
 							balances[send][k] = balances[send][k].Sub(abs) // sender -abs
 
 							// Do not emit assets from RippleState to avoid issuer ambiguity
+						case "Offer":
+							// Collect offer asset pairs and approximate execution quote from deltas
+							owner, _ := fields["Account"].(string)
+							if owner == "" {
+								break
+							}
+							// Parse helper
+							parseAmount := func(v interface{}) (assetKey, decimal.Decimal) {
+								if m, ok := v.(map[string]interface{}); ok {
+									cur, _ := m["currency"].(string)
+									cur = normCurrency(cur)
+									iss, _ := m["issuer"].(string)
+									vs, _ := m["value"].(string)
+									val, _ := decimal.NewFromString(vs)
+									return assetKey{currency: cur, issuer: iss}, val
+								}
+								if s, ok := v.(string); ok {
+									// XRP in drops
+									iv, _ := decimal.NewFromString(s)
+									x := iv.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+									return assetKey{currency: "XRP", issuer: ""}, x
+								}
+								return assetKey{}, decimal.Zero
+							}
+							getPrevFinal := func(obj map[string]interface{}) (prevGets, finGets assetKey, prevG, finG decimal.Decimal, prevPays, finPays assetKey, prevP, finP decimal.Decimal) {
+								var pf, ff map[string]interface{}
+								if modified, ok := obj["ModifiedNode"].(map[string]interface{}); ok {
+									pf, _ = modified["PreviousFields"].(map[string]interface{})
+									ff, _ = modified["FinalFields"].(map[string]interface{})
+								} else if deleted, ok := obj["DeletedNode"].(map[string]interface{}); ok {
+									pf, _ = deleted["PreviousFields"].(map[string]interface{})
+									ff, _ = deleted["FinalFields"].(map[string]interface{})
+								} else if created, ok := obj["CreatedNode"].(map[string]interface{}); ok {
+									ff, _ = created["NewFields"].(map[string]interface{})
+								}
+								if pf != nil {
+									pgAK, pg := parseAmount(pf["TakerGets"]) // previous gets
+									ppAK, pp := parseAmount(pf["TakerPays"]) // previous pays
+									prevGets, prevG = pgAK, pg
+									prevPays, prevP = ppAK, pp
+								}
+								if ff != nil {
+									fgAK, fg := parseAmount(ff["TakerGets"]) // final gets
+									fpAK, fp := parseAmount(ff["TakerPays"]) // final pays
+									finGets, finG = fgAK, fg
+									finPays, finP = fpAK, fp
+								}
+								return
+							}
+							prevGetsAK, finGetsAK, prevGetsAmt, finGetsAmt, prevPaysAK, finPaysAK, prevPaysAmt, finPaysAmt := getPrevFinal(node)
+							// Prefer asset keys from FinalFields when available, else PreviousFields
+							getsAK := finGetsAK
+							paysAK := finPaysAK
+							if getsAK.currency == "" {
+								getsAK = prevGetsAK
+							}
+							if paysAK.currency == "" {
+								paysAK = prevPaysAK
+							}
+							// Compute executed amounts (previous - final)
+							execGets := prevGetsAmt.Sub(finGetsAmt)
+							execPays := prevPaysAmt.Sub(finPaysAmt)
+							if execGets.IsNegative() {
+								execGets = execGets.Neg()
+							}
+							if execPays.IsNegative() {
+								execPays = execPays.Neg()
+							}
+							quote := decimal.Zero
+							if !execGets.IsZero() {
+								quote = execPays.Div(execGets)
+							}
+							// Record offer pair only if we have both sides
+							if getsAK.currency != "" && (paysAK.currency != "" || (paysAK.currency == "XRP" && paysAK.issuer == "")) {
+								offersByOwner[owner] = append(offersByOwner[owner], offerPair{owner: owner, gets: getsAK, pays: paysAK, quote: quote})
+							}
 						}
 					}
 
@@ -476,9 +559,57 @@ func RunConsumers() {
 						}
 					}
 
+					// Determine tx-level from/to assets for initiator using Payment fields
+					var txFromAK, txToAK assetKey
+					hasTxFrom, hasTxTo := false, false
+					parseAK := func(v interface{}) (assetKey, bool) {
+						m, ok := v.(map[string]interface{})
+						if !ok {
+							return assetKey{}, false
+						}
+						cur, _ := m["currency"].(string)
+						cur = normCurrency(cur)
+						iss, _ := m["issuer"].(string)
+						if cur == "" {
+							return assetKey{}, false
+						}
+						return assetKey{currency: cur, issuer: iss}, true
+					}
+					if sm, ok := base["SendMax"].(map[string]interface{}); ok {
+						txFromAK, hasTxFrom = parseAK(sm)
+					}
+					if da, ok := meta["delivered_amount"].(map[string]interface{}); ok {
+						txToAK, hasTxTo = parseAK(da)
+					} else if amt, ok := base["Amount"].(map[string]interface{}); ok {
+						txToAK, hasTxTo = parseAK(amt)
+					}
+					txAssetsDiffer := hasTxFrom && hasTxTo && (txFromAK != txToAK)
+
+					// Initiator account for this transaction
+					initiator := account
+
+					// Compute initiator totals for quote derivation
+					spentBy := make(map[assetKey]decimal.Decimal)
+					recvBy := make(map[assetKey]decimal.Decimal)
+					for _, e := range edges {
+						if e.from == initiator {
+							spentBy[e.asset] = spentBy[e.asset].Add(e.amount)
+						}
+						if e.to == initiator {
+							recvBy[e.asset] = recvBy[e.asset].Add(e.amount)
+						}
+					}
+					initiatorQuote := decimal.Zero
+					if txAssetsDiffer {
+						spent := spentBy[txFromAK]
+						recvd := recvBy[txToAK]
+						if !spent.IsZero() && !recvd.IsZero() {
+							initiatorQuote = recvd.Div(spent)
+						}
+					}
+
 					// Heuristics to classify kind per edge
 					// Determine if initiator participates in multi-asset (swap)
-					initiator := account
 					seenAssetsForInitiator := 0
 					uniq := make(map[assetKey]struct{})
 					for _, e := range edges {
@@ -500,11 +631,6 @@ func RunConsumers() {
 
 					for _, e := range edges {
 						kind := "transfer"
-						if (e.from == initiator || e.to == initiator) && seenAssetsForInitiator >= 2 {
-							kind = "swap"
-						} else if e.asset.currency != "XRP" {
-							kind = "dexOffer"
-						}
 						// compute IDs
 						accFrom := idAccount(e.from)
 						accTo := idAccount(e.to)
@@ -552,9 +678,88 @@ func RunConsumers() {
 								} else {
 									toAssetId = idAssetIOU(normCurrency(re.asset.currency), re.asset.issuer)
 								}
+							}
+						}
+						// Offer-based fallback: if still same-asset or empty, try to infer via offers
+						if toAssetId == fromAssetId || toAssetId == "" {
+							matchAsset := func(a1, a2 assetKey) bool {
+								if a1.currency != a2.currency {
+									return false
+								}
+								if a1.issuer != "" && a2.issuer != "" && a1.issuer != a2.issuer {
+									return false
+								}
+								return true
+							}
+							useOffer := func(owner string) bool {
+								list := offersByOwner[owner]
+								for _, op := range list {
+									if matchAsset(e.asset, op.gets) {
+										// counter is pays
+										if op.pays.currency == "XRP" {
+											toAssetId = idAssetXRP()
+										} else {
+											toAssetId = idAssetIOU(normCurrency(op.pays.currency), op.pays.issuer)
+										}
+										if !op.quote.IsZero() {
+											toAmt = amtAbs.Mul(op.quote)
+										} else if !initiatorQuote.IsZero() && (owner == initiator || e.from == initiator || e.to == initiator) {
+											toAmt = amtAbs.Mul(initiatorQuote)
+										}
+										return true
+									}
+									if matchAsset(e.asset, op.pays) {
+										// counter is gets
+										if op.gets.currency == "XRP" {
+											toAssetId = idAssetXRP()
+										} else {
+											toAssetId = idAssetIOU(normCurrency(op.gets.currency), op.gets.issuer)
+										}
+										if !op.quote.IsZero() {
+											// invert
+											toAmt = amtAbs.Div(op.quote)
+										} else if !initiatorQuote.IsZero() && (owner == initiator || e.from == initiator || e.to == initiator) {
+											toAmt = amtAbs.Div(initiatorQuote)
+										}
+										return true
+									}
+								}
+								return false
+							}
+							if !useOffer(e.from) {
+								_ = useOffer(e.to)
+							}
+						}
+
+						// If still unresolved, default to same-asset transfer
+						if toAssetId == "" {
+							toAssetId = fromAssetId
+							if toAmt.IsZero() {
+								toAmt = amtAbs
+							}
+						}
+
+						// Classify kind after determining assets
+						if (e.from == initiator || e.to == initiator) && seenAssetsForInitiator >= 2 {
+							kind = "swap"
+						} else if toAssetId != fromAssetId {
+							kind = "dexOffer"
+						} else {
+							kind = "transfer"
+						}
+						// Fallback improvement: if initiator is involved and tx indicates cross-asset,
+						// but we couldn't find a proper reverse edge (or we paired same-asset),
+						// use tx-level from/to assets and initiatorQuote to derive counter amount.
+						if (toAssetId == fromAssetId || toAssetId == "") && txAssetsDiffer && (e.from == initiator || e.to == initiator) && hasTxTo {
+							// set toAssetId from txToAK
+							if txToAK.currency == "XRP" {
+								toAssetId = idAssetXRP()
 							} else {
-								// no reverse edge: treat as same-asset transfer
-								toAssetId = fromAssetId
+								toAssetId = idAssetIOU(normCurrency(txToAK.currency), txToAK.issuer)
+							}
+							if !initiatorQuote.IsZero() {
+								toAmt = amtAbs.Mul(initiatorQuote)
+							} else if toAmt.IsZero() {
 								toAmt = amtAbs
 							}
 						}
