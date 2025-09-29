@@ -187,6 +187,20 @@ func RunConsumers() {
 				_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHTransactions(), Key: []byte(hash), Value: row})
 			}
 
+			// ensure XRP asset exists in assets table (emit once per process)
+			if _, loaded := emittedAssets.LoadOrStore("XRP", true); !loaded {
+				xrpRow := models.CHAssetRow{
+					AssetID:   idAssetXRP(),
+					AssetType: "XRP",
+					Currency:  "XRP",
+					IssuerID:  uuid.Nil.String(),
+					Symbol:    "XRP",
+				}
+				if row, err := json.Marshal(xrpRow); err == nil {
+					_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte("XRP"), Value: row})
+				}
+			}
+
 			// accounts rows: emit deduped final JSON rows for CH accounts
 			if account != "" {
 				aid := idAccount(account)
