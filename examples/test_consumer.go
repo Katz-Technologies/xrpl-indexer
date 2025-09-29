@@ -376,8 +376,6 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 
 			printPrettyJSON(nodes, "AffectedNodes")
 
-
-
 			// if account == destination {
 			// 	for _, n := range nodes {
 			// 		node, _ := n.(map[string]interface{})
@@ -402,7 +400,6 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 
 			// }
 
-			
 			// Место для декс оферов (Илья)
 			// Место для декс оферов (Илья)
 			// Место для декс оферов (Илья)
@@ -413,8 +410,118 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 			// Место для декс оферов (Илья)
 			// Место для декс оферов (Илья)
 
+			for _, n := range nodes {
+				node, _ := n.(map[string]interface{})
+				var modified map[string]interface{}
+				var ok bool
+				// Try ModifiedNode first, then DeletedNode
+				if modified, ok = node["ModifiedNode"].(map[string]interface{}); !ok {
+					modified, ok = node["DeletedNode"].(map[string]interface{})
+				}
+				if ok {
+					if ledgerEntryType, ok := modified["LedgerEntryType"].(string); ok {
+						if ledgerEntryType == "Offer" {
+							if finalFields, ok := modified["FinalFields"].(map[string]interface{}); ok {
+								if previousFields, ok := modified["PreviousFields"].(map[string]interface{}); ok {
+									// Обрабатываем TakerGets из FinalFields
+									if finalFieldsTakerGets, exists := finalFields["TakerGets"]; exists {
+										fmt.Printf("=== FinalFields TakerGets ===\n")
+										switch v := finalFieldsTakerGets.(type) {
+										case string:
+											fmt.Printf("Тип: XRP (строка), Значение: %s\n", v)
+										case map[string]interface{}:
+											fmt.Printf("Тип: Токен (объект)\n")
+											if currency, ok := v["currency"].(string); ok {
+												fmt.Printf("Currency: %s\n", currency)
+											}
+											if issuer, ok := v["issuer"].(string); ok {
+												fmt.Printf("Issuer: %s\n", issuer)
+											}
+											if value, ok := v["value"].(string); ok {
+												fmt.Printf("Value: %s\n", value)
+											}
+										default:
+											fmt.Printf("Неизвестный тип: %T\n", v)
+										}
+										fmt.Println("========================")
+									}
 
+									// Обрабатываем TakerGets из PreviousFields
+									if previousFieldsTakerGets, exists := previousFields["TakerGets"]; exists {
+										fmt.Printf("=== PreviousFields TakerGets ===\n")
+										switch v := previousFieldsTakerGets.(type) {
+										case string:
+											fmt.Printf("Тип: XRP (строка), Значение: %s\n", v)
+										case map[string]interface{}:
+											fmt.Printf("Тип: Токен (объект)\n")
+											if currency, ok := v["currency"].(string); ok {
+												fmt.Printf("Currency: %s\n", currency)
+											}
+											if issuer, ok := v["issuer"].(string); ok {
+												fmt.Printf("Issuer: %s\n", issuer)
+											}
+											if value, ok := v["value"].(string); ok {
+												fmt.Printf("Value: %s\n", value)
+											}
+										default:
+											fmt.Printf("Неизвестный тип: %T\n", v)
+										}
+										fmt.Println("==========================")
+									}
 
+									// Обрабатываем TakerPays из FinalFields
+									if finalFieldsTakerPays, exists := finalFields["TakerPays"]; exists {
+										fmt.Printf("=== FinalFields TakerPays ===\n")
+										switch v := finalFieldsTakerPays.(type) {
+										case string:
+											fmt.Printf("Тип: XRP (строка), Значение: %s\n", v)
+										case map[string]interface{}:
+											fmt.Printf("Тип: Токен (объект)\n")
+											if currency, ok := v["currency"].(string); ok {
+												fmt.Printf("Currency: %s\n", currency)
+											}
+											if issuer, ok := v["issuer"].(string); ok {
+												fmt.Printf("Issuer: %s\n", issuer)
+											}
+											if value, ok := v["value"].(string); ok {
+												fmt.Printf("Value: %s\n", value)
+											}
+										default:
+											fmt.Printf("Неизвестный тип: %T\n", v)
+										}
+										fmt.Println("========================")
+									}
+
+									// Обрабатываем TakerPays из PreviousFields
+									if previousFieldsTakerPays, exists := previousFields["TakerPays"]; exists {
+										fmt.Printf("=== PreviousFields TakerPays ===\n")
+										switch v := previousFieldsTakerPays.(type) {
+										case string:
+											fmt.Printf("Тип: XRP (строка), Значение: %s\n", v)
+										case map[string]interface{}:
+											fmt.Printf("Тип: Токен (объект)\n")
+											if currency, ok := v["currency"].(string); ok {
+												fmt.Printf("Currency: %s\n", currency)
+											}
+											if issuer, ok := v["issuer"].(string); ok {
+												fmt.Printf("Issuer: %s\n", issuer)
+											}
+											if value, ok := v["value"].(string); ok {
+												fmt.Printf("Value: %s\n", value)
+											}
+										default:
+											fmt.Printf("Неизвестный тип: %T\n", v)
+										}
+										fmt.Println("==========================")
+									}
+								}
+							}
+						}
+
+					}
+				}
+
+			}
 
 			type assetKey struct{ currency, issuer string }
 			balances := make(map[string]map[assetKey]decimal.Decimal)
@@ -623,7 +730,6 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 			}
 		}
 	}
-
 	return results, nil
 }
 
