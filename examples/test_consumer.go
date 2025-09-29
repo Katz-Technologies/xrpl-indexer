@@ -389,15 +389,20 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 			printPrettyJSON(nodes, "AffectedNodes")
 
 			if account == destination {
+				amount_1_prev := 0.
+				amount_1_final := 0.
+
+				amount_2_prev := 0.
+				amount_2_final := 0.
+
+				delta_1 := 0.
+				delta_2 := 0.
+
 				for _, n := range nodes {
 					node, _ := n.(map[string]interface{})
 					if modified, ok := node["ModifiedNode"].(map[string]interface{}); ok {
 						if final_fields, ok := modified["FinalFields"].(map[string]interface{}); ok {
-							amount_1_prev := 0.
-							amount_1_final := 0.
 
-							amount_2_prev := 0.
-							amount_2_final := 0.
 
 							if node_account, ok := final_fields["Account"].(string); ok {
 								if account == node_account {
@@ -433,8 +438,8 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 										}
 									}
 
-									delta := amount_1_final - amount_1_prev + (float64(feeDrops) / float64(models.DROPS_IN_XRP))
-									fmt.Printf("delta: %f\n", delta)
+									delta_1 = amount_1_final - amount_1_prev + (float64(feeDrops) / float64(models.DROPS_IN_XRP))
+									fmt.Printf("delta_1: %f\n", delta_1)
 									fmt.Printf("(float64(feeDrops) / float64(models.DROPS_IN_XRP)): %f\n", (float64(feeDrops) / float64(models.DROPS_IN_XRP)))
 									fmt.Printf("feeDrops: %d\n", feeDrops)
 									fmt.Printf("amount_1_prev: %f\n", amount_1_prev)
@@ -446,14 +451,70 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 
 							if high_limit, ok := final_fields["HighLimit"].(map[string]interface{}); ok {
 								if account == high_limit["issuer"].(string) {
-									
+									if balance, ok := final_fields["Balance"].(map[string]interface{}); ok {
+										// IOU balance
+										if vs, ok := balance["value"].(string); ok {
+											amount_2_final, _ = strconv.ParseFloat(vs, 64)
+										}
+									} else if balanceStr, ok := final_fields["Balance"].(string); ok {
+										// XRP balance
+										if v, err := strconv.ParseFloat(balanceStr, 64); err == nil {
+											amount_2_final = v / float64(models.DROPS_IN_XRP) // Convert drops to XRP
+										}
+									}
+
+									if previous_fields, ok := modified["PreviousFields"].(map[string]interface{}); ok {
+										if balance, ok := previous_fields["Balance"].(map[string]interface{}); ok {
+											// IOU balance
+											if vs, ok := balance["value"].(string); ok {
+												amount_2_prev, _ = strconv.ParseFloat(vs, 64)
+											}
+										} else if balanceStr, ok := previous_fields["Balance"].(string); ok {
+											// XRP balance
+											if v, err := strconv.ParseFloat(balanceStr, 64); err == nil {
+												amount_2_prev = v / float64(models.DROPS_IN_XRP) // Convert drops to XRP
+											}
+										}
+									}
+
+									if amount_2_final < 0 {
+										amount_2_final = amount_2_final * -1
+									}
+
+									if amount_2_prev < 0 {
+										amount_2_prev = amount_2_prev * -1
+									}
+
+									delta_2 = amount_2_final - amount_2_prev
+									fmt.Printf("delta_2: %f\n", delta_2)
+									fmt.Printf("amount_2_prev: %f\n", amount_2_prev)
+									fmt.Printf("amount_2_final: %f\n", amount_2_final)
 								}
 							}
+
+							
 
 						}
 					}
 				}
 
+				
+				from_amount := 0.
+				to_amount := 0.
+
+				if (amount_1_final < amount_1_prev) {
+					from_amount = delta_1
+					to_amount = delta_2
+				} else {
+					from_amount = delta_2
+					to_amount = delta_1
+				}
+
+				rate := (from_amount * -1) / to_amount 
+
+				fmt.Printf("from_amount: %f\n", from_amount)
+				fmt.Printf("to_amount: %f\n", to_amount)
+				fmt.Printf("rate: %f\n", rate)
 			}
 
 			// Место для декс оферов (Илья)
