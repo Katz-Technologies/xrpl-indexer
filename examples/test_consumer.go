@@ -514,6 +514,100 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 										}
 										fmt.Println("==========================")
 									}
+
+									// Вычисляем дельту для владельца оффера
+									if account, ok := finalFields["Account"].(string); ok {
+										fmt.Printf("=== ДЕЛЬТА ДЛЯ ВЛАДЕЛЬЦА ОФФЕРА ===\n")
+										fmt.Printf("Account: %s\n", account)
+
+										// Получаем значения TakerGets (что получает владелец)
+										var prevTakerGetsValue, finalTakerGetsValue decimal.Decimal
+										var prevTakerGetsCurrency string
+										var prevTakerGetsIssuer string
+
+										// PreviousFields TakerGets
+										if prevTakerGets, exists := previousFields["TakerGets"]; exists {
+											switch v := prevTakerGets.(type) {
+											case string:
+												prevTakerGetsValue, _ = decimal.NewFromString(v)
+												prevTakerGetsCurrency = "XRP"
+											case map[string]interface{}:
+												if currency, ok := v["currency"].(string); ok {
+													prevTakerGetsCurrency = currency
+												}
+												if issuer, ok := v["issuer"].(string); ok {
+													prevTakerGetsIssuer = issuer
+												}
+												if value, ok := v["value"].(string); ok {
+													prevTakerGetsValue, _ = decimal.NewFromString(value)
+												}
+											}
+										}
+
+										// FinalFields TakerGets
+										if finalTakerGets, exists := finalFields["TakerGets"]; exists {
+											switch v := finalTakerGets.(type) {
+											case string:
+												finalTakerGetsValue, _ = decimal.NewFromString(v)
+											case map[string]interface{}:
+												if value, ok := v["value"].(string); ok {
+													finalTakerGetsValue, _ = decimal.NewFromString(value)
+												}
+											}
+										}
+
+										// Получаем значения TakerPays (что отдает владелец)
+										var prevTakerPaysValue, finalTakerPaysValue decimal.Decimal
+										var prevTakerPaysCurrency string
+										var prevTakerPaysIssuer string
+
+										// PreviousFields TakerPays
+										if prevTakerPays, exists := previousFields["TakerPays"]; exists {
+											switch v := prevTakerPays.(type) {
+											case string:
+												prevTakerPaysValue, _ = decimal.NewFromString(v)
+												prevTakerPaysCurrency = "XRP"
+											case map[string]interface{}:
+												if currency, ok := v["currency"].(string); ok {
+													prevTakerPaysCurrency = currency
+												}
+												if issuer, ok := v["issuer"].(string); ok {
+													prevTakerPaysIssuer = issuer
+												}
+												if value, ok := v["value"].(string); ok {
+													prevTakerPaysValue, _ = decimal.NewFromString(value)
+												}
+											}
+										}
+
+										// FinalFields TakerPays
+										if finalTakerPays, exists := finalFields["TakerPays"]; exists {
+											switch v := finalTakerPays.(type) {
+											case string:
+												finalTakerPaysValue, _ = decimal.NewFromString(v)
+											case map[string]interface{}:
+												if value, ok := v["value"].(string); ok {
+													finalTakerPaysValue, _ = decimal.NewFromString(value)
+												}
+											}
+										}
+
+										// Вычисляем дельты
+										takerGetsDelta := prevTakerGetsValue.Sub(finalTakerGetsValue) // Что получил владелец
+										takerPaysDelta := prevTakerPaysValue.Sub(finalTakerPaysValue) // Что отдал владелец
+
+										fmt.Printf("TakerGets Delta (получил): %s %s\n", takerGetsDelta.String(), prevTakerGetsCurrency)
+										if prevTakerGetsIssuer != "" {
+											fmt.Printf("TakerGets Issuer: %s\n", prevTakerGetsIssuer)
+										}
+
+										fmt.Printf("TakerPays Delta (отдал): %s %s\n", takerPaysDelta.String(), prevTakerPaysCurrency)
+										if prevTakerPaysIssuer != "" {
+											fmt.Printf("TakerPays Issuer: %s\n", prevTakerPaysIssuer)
+										}
+
+										fmt.Println("=====================================")
+									}
 								}
 							}
 						}
