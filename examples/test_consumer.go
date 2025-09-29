@@ -239,11 +239,23 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 	}
 
 	feeDrops := uint64(0)
-	if fee, ok := base["Fee"].(float64); ok {
-		feeDrops = uint64(fee)
-	} else if feeStr, ok := base["Fee"].(string); ok {
-		if v, err := strconv.ParseUint(feeStr, 10, 64); err == nil {
-			feeDrops = v
+
+	switch v := base["Fee"].(type) {
+	case float64:
+		feeDrops = uint64(v)
+	case int:
+		feeDrops = uint64(v)
+	case int64:
+		feeDrops = uint64(v)
+	case uint64:
+		feeDrops = v
+	case string:
+		if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+			feeDrops = parsed
+		}
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil {
+			feeDrops = uint64(parsed)
 		}
 	}
 
@@ -376,29 +388,73 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 
 			printPrettyJSON(nodes, "AffectedNodes")
 
-			// if account == destination {
-			// 	for _, n := range nodes {
-			// 		node, _ := n.(map[string]interface{})
-			// 		if modified, ok := node["ModifiedNode"].(map[string]interface{}); ok {
-			// 			if final_fields, ok := modified["FinalFields"].(map[string]interface{}); ok {
-			// 				if node_account, ok := final_fields["Account"].(string); ok {
-			// 					if account == node_account {
+			if account == destination {
+				for _, n := range nodes {
+					node, _ := n.(map[string]interface{})
+					if modified, ok := node["ModifiedNode"].(map[string]interface{}); ok {
+						if final_fields, ok := modified["FinalFields"].(map[string]interface{}); ok {
+							amount_1_prev := 0.
+							amount_1_final := 0.
 
-			// 					}
-			// 				}
-			// 			}
-			// 			if previous_fields, ok := modified["PreviousFields"].(map[string]interface{}); ok {
-			// 				if account, ok := previous_fields["Account"].(string); ok {
-			// 					if vs, ok := balance["value"].(string); ok {
-			// 						delivered_amount, _ = decimal.NewFromString(vs)
-			// 					}
-			// 				}
-			// 			}
+							amount_2_prev := 0.
+							amount_2_final := 0.
 
-			// 		}
-			// 	}
+							if node_account, ok := final_fields["Account"].(string); ok {
+								if account == node_account {
 
-			// }
+
+									// Handle Balance field - can be string (XRP) or map (IOU)
+									if balance, ok := final_fields["Balance"].(map[string]interface{}); ok {
+										// IOU balance
+										if vs, ok := balance["value"].(string); ok {
+											amount_1_final, _ = strconv.ParseFloat(vs, 64)
+										}
+									} else if balanceStr, ok := final_fields["Balance"].(string); ok {
+										// XRP balance
+										if v, err := strconv.ParseFloat(balanceStr, 64); err == nil {
+											amount_1_final = v / float64(models.DROPS_IN_XRP) // Convert drops to XRP
+										}
+									}
+
+									fmt.Printf("amount_1_final: %f\n", amount_1_final)
+
+									// Handle PreviousFields
+									if previous_fields, ok := modified["PreviousFields"].(map[string]interface{}); ok {
+										if balance, ok := previous_fields["Balance"].(map[string]interface{}); ok {
+											// IOU balance
+											if vs, ok := balance["value"].(string); ok {
+												amount_1_prev, _ = strconv.ParseFloat(vs, 64)
+											}
+										} else if balanceStr, ok := previous_fields["Balance"].(string); ok {
+											// XRP balance
+											if v, err := strconv.ParseFloat(balanceStr, 64); err == nil {
+												amount_1_prev = v / float64(models.DROPS_IN_XRP) // Convert drops to XRP
+											}
+										}
+									}
+
+									delta := amount_1_final - amount_1_prev + (float64(feeDrops) / float64(models.DROPS_IN_XRP))
+									fmt.Printf("delta: %f\n", delta)
+									fmt.Printf("(float64(feeDrops) / float64(models.DROPS_IN_XRP)): %f\n", (float64(feeDrops) / float64(models.DROPS_IN_XRP)))
+									fmt.Printf("feeDrops: %d\n", feeDrops)
+									fmt.Printf("amount_1_prev: %f\n", amount_1_prev)
+									fmt.Printf("amount_1_final: %f\n", amount_1_final)
+
+
+								}
+							}
+
+							if high_limit, ok := final_fields["HighLimit"].(map[string]interface{}); ok {
+								if account == high_limit["issuer"].(string) {
+									
+								}
+							}
+
+						}
+					}
+				}
+
+			}
 
 			// Место для декс оферов (Илья)
 			// Место для декс оферов (Илья)
