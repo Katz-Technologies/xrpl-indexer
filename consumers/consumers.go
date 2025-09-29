@@ -577,6 +577,10 @@ func RunConsumers() {
 					}
 					if sm, ok := base["SendMax"].(map[string]interface{}); ok {
 						txFromAK, hasTxFrom = parseAK(sm)
+					} else if _, ok := base["SendMax"].(string); ok {
+						// SendMax as string (XRP in drops)
+						txFromAK = assetKey{currency: "XRP", issuer: ""}
+						hasTxFrom = true
 					}
 					if da, ok := meta["delivered_amount"].(map[string]interface{}); ok {
 						txToAK, hasTxTo = parseAK(da)
