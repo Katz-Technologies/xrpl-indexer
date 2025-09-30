@@ -990,14 +990,19 @@ func RunConsumers() {
 					} else {
 						fmt.Printf("=== Трансфер ===\n")
 		
-						from_id := account
-						to_id := destination
+						from_id := idAccount(account)
+						to_id := idAccount(destination)
+
+						from_asset_id := ""
+						to_asset_id := ""
 		
 						fmt.Printf("from_id: %s\n", from_id)
 						fmt.Printf("to_id: %s\n", to_id)
 		
 						amount := decimal.NewFromFloat(0)
-		
+						amount_issuer := ""
+						amount_currency := ""
+
 						if amountField, ok := base["Amount"].(map[string]interface{}); ok {
 							if vs, ok := amountField["value"].(string); ok {
 								if _, ok := amountField["native"].(bool); ok {
@@ -1008,319 +1013,51 @@ func RunConsumers() {
 									amount, _ = decimal.NewFromString(vs)
 								}
 							}
+							if issuer, ok := amountField["issuer"].(string); ok {
+								amount_issuer = issuer
+							} else {
+								amount_issuer = ""
+							}
+							if currency, ok := amountField["currency"].(string); ok {
+								amount_currency = currency
+							} else {
+								amount_currency = ""
+							}
 						}
-		
-						fmt.Printf("amount: %s\n", amount.Truncate(15).String())
+						
+						if amount_currency == "XRP" {
+							from_asset_id = idAssetXRP()
+						} else {
+							from_asset_id = idAssetIOU(normCurrency(amount_currency), amount_issuer)
+						}
+
+						if amount_currency == "XRP" {
+							to_asset_id = idAssetXRP()
+						} else {
+							to_asset_id = idAssetIOU(normCurrency(amount_currency), amount_issuer)
+						}
+
+						CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
+							TxID: txId,
+							FromID: from_id,
+							ToID: to_id,
+							FromAssetID: from_asset_id,
+							ToAssetID: to_asset_id,
+							FromAmount: amount.Neg().String(),
+							ToAmount: amount.String(),
+							Quote: "1",
+							Kind: "transfer",
+						})
+
+						// fmt.Printf("CHMoneyFlowRows: %+v\n", CHMoneyFlowRows)
 					}
 
 					fmt.Println("==============HASH==============")
 					fmt.Println(hash)
 					fmt.Println("=====================================")
 
-					// Build edges by matching positive and negative deltas per asset
-					epsilon := decimal.New(1, -12) // 1e-12 to drop dust
-					type edge struct {
-						from, to string
-						asset    assetKey
-						amount   decimal.Decimal
-					}
-					edges := make([]edge, 0)
-					for ak := range func(m map[string]map[assetKey]decimal.Decimal) map[assetKey]struct{} {
-						u := make(map[assetKey]struct{})
-						for _, mm := range m {
-							for k := range mm {
-								u[k] = struct{}{}
-							}
-						}
-						return u
-					}(balances) {
-						// collect sources and sinks for this asset
-						type pair struct {
-							addr string
-							amt  decimal.Decimal
-						}
-						sources := make([]pair, 0)
-						sinks := make([]pair, 0)
-						for addr, mm := range balances {
-							amt := mm[ak]
-							if amt.IsZero() {
-								continue
-							}
-							if amt.IsNegative() {
-								sources = append(sources, pair{addr, amt.Neg()})
-							} else {
-								sinks = append(sinks, pair{addr, amt})
-							}
-						}
-						// greedy match
-						i, j := 0, 0
-						for i < len(sources) && j < len(sinks) {
-							s := sources[i]
-							t := sinks[j]
-							take := decimal.Min(s.amt, t.amt)
-							if take.IsZero() || take.LessThan(epsilon) {
-								break
-							}
-							edges = append(edges, edge{from: s.addr, to: t.addr, asset: ak, amount: take})
-							s.amt = s.amt.Sub(take)
-							t.amt = t.amt.Sub(take)
-							if s.amt.IsZero() {
-								i++
-							} else {
-								sources[i] = s
-							}
-							if t.amt.IsZero() {
-								j++
-							} else {
-								sinks[j] = t
-							}
-						}
-					}
-
-					// Determine tx-level from/to assets for initiator using Payment fields
-					var txFromAK, txToAK assetKey
-					hasTxFrom, hasTxTo := false, false
-					parseAK := func(v interface{}) (assetKey, bool) {
-						m, ok := v.(map[string]interface{})
-						if !ok {
-							return assetKey{}, false
-						}
-						cur, _ := m["currency"].(string)
-						cur = normCurrency(cur)
-						iss, _ := m["issuer"].(string)
-						if cur == "" {
-							return assetKey{}, false
-						}
-						return assetKey{currency: cur, issuer: iss}, true
-					}
-					if sm, ok := base["SendMax"].(map[string]interface{}); ok {
-						txFromAK, hasTxFrom = parseAK(sm)
-					} else if _, ok := base["SendMax"].(string); ok {
-						// SendMax as string (XRP in drops)
-						txFromAK = assetKey{currency: "XRP", issuer: ""}
-						hasTxFrom = true
-					}
-					if da, ok := meta["delivered_amount"].(map[string]interface{}); ok {
-						txToAK, hasTxTo = parseAK(da)
-					} else if amt, ok := base["Amount"].(map[string]interface{}); ok {
-						txToAK, hasTxTo = parseAK(amt)
-					}
-					txAssetsDiffer := hasTxFrom && hasTxTo && (txFromAK != txToAK)
-
-					// Initiator account for this transaction
-					initiator := account
-
-					// Compute initiator totals for quote derivation
-					spentBy := make(map[assetKey]decimal.Decimal)
-					recvBy := make(map[assetKey]decimal.Decimal)
-					for _, e := range edges {
-						if e.from == initiator {
-							spentBy[e.asset] = spentBy[e.asset].Add(e.amount)
-						}
-						if e.to == initiator {
-							recvBy[e.asset] = recvBy[e.asset].Add(e.amount)
-						}
-					}
-					initiatorQuote := decimal.Zero
-					if txAssetsDiffer {
-						spent := spentBy[txFromAK]
-						recvd := recvBy[txToAK]
-						if !spent.IsZero() && !recvd.IsZero() {
-							initiatorQuote = recvd.Div(spent)
-						}
-					}
-
-					// Heuristics to classify kind per edge
-					// Determine if initiator participates in multi-asset (swap)
-					seenAssetsForInitiator := 0
-					uniq := make(map[assetKey]struct{})
-					for _, e := range edges {
-						if e.from == initiator || e.to == initiator {
-							if _, ok := uniq[e.asset]; !ok {
-								uniq[e.asset] = struct{}{}
-								seenAssetsForInitiator++
-							}
-						}
-					}
-
-					// Index edges by directed pair to allow cross-asset pairing
-					edgesByPair := make(map[string][]edge)
-					pairKey := func(a, b string) string { return a + "|" + b }
-					for _, e := range edges {
-						k := pairKey(e.from, e.to)
-						edgesByPair[k] = append(edgesByPair[k], e)
-					}
-
-					for _, e := range edges {
-						kind := "transfer"
-						// compute IDs
-						accFrom := idAccount(e.from)
-						accTo := idAccount(e.to)
-						var fromAssetId string
-						if e.asset.currency == "XRP" {
-							fromAssetId = idAssetXRP()
-						} else {
-							fromAssetId = idAssetIOU(normCurrency(e.asset.currency), e.asset.issuer)
-						}
-						// magnitude for current edge
-						amtAbs := e.amount
-						if amtAbs.IsNegative() {
-							amtAbs = amtAbs.Neg()
-						}
-						if amtAbs.LessThan(epsilon) {
-							continue
-						}
-						// find reverse edge to determine counter-asset and amount
-						revList := edgesByPair[pairKey(e.to, e.from)]
-						var toAmt decimal.Decimal
-						var toAssetId string
-						for _, re := range revList {
-							if re.asset.currency != e.asset.currency || re.asset.issuer != e.asset.issuer {
-								toAmt = re.amount
-								if toAmt.IsNegative() {
-									toAmt = toAmt.Neg()
-								}
-								if re.asset.currency == "XRP" {
-									toAssetId = idAssetXRP()
-								} else {
-									toAssetId = idAssetIOU(normCurrency(re.asset.currency), re.asset.issuer)
-								}
-								break
-							}
-						}
-						if toAssetId == "" {
-							if len(revList) > 0 {
-								re := revList[0]
-								toAmt = re.amount
-								if toAmt.IsNegative() {
-									toAmt = toAmt.Neg()
-								}
-								if re.asset.currency == "XRP" {
-									toAssetId = idAssetXRP()
-								} else {
-									toAssetId = idAssetIOU(normCurrency(re.asset.currency), re.asset.issuer)
-								}
-							}
-						}
-						// Offer-based fallback: if still same-asset or empty, try to infer via offers
-						if toAssetId == fromAssetId || toAssetId == "" {
-							matchAsset := func(a1, a2 assetKey) bool {
-								if a1.currency != a2.currency {
-									return false
-								}
-								if a1.issuer != "" && a2.issuer != "" && a1.issuer != a2.issuer {
-									return false
-								}
-								return true
-							}
-							useOffer := func(owner string) bool {
-								list := offersByOwner[owner]
-								for _, op := range list {
-									if matchAsset(e.asset, op.gets) {
-										// counter is pays
-										if op.pays.currency == "XRP" {
-											toAssetId = idAssetXRP()
-										} else {
-											toAssetId = idAssetIOU(normCurrency(op.pays.currency), op.pays.issuer)
-										}
-										if !op.quote.IsZero() {
-											toAmt = amtAbs.Mul(op.quote)
-										} else if !initiatorQuote.IsZero() && (owner == initiator || e.from == initiator || e.to == initiator) {
-											toAmt = amtAbs.Mul(initiatorQuote)
-										}
-										return true
-									}
-									if matchAsset(e.asset, op.pays) {
-										// counter is gets
-										if op.gets.currency == "XRP" {
-											toAssetId = idAssetXRP()
-										} else {
-											toAssetId = idAssetIOU(normCurrency(op.gets.currency), op.gets.issuer)
-										}
-										if !op.quote.IsZero() {
-											// invert
-											toAmt = amtAbs.Div(op.quote)
-										} else if !initiatorQuote.IsZero() && (owner == initiator || e.from == initiator || e.to == initiator) {
-											toAmt = amtAbs.Div(initiatorQuote)
-										}
-										return true
-									}
-								}
-								return false
-							}
-							if !useOffer(e.from) {
-								_ = useOffer(e.to)
-							}
-						}
-
-						// If still unresolved, default to same-asset transfer
-						if toAssetId == "" {
-							toAssetId = fromAssetId
-							if toAmt.IsZero() {
-								toAmt = amtAbs
-							}
-						}
-
-						// Classify kind after determining assets
-						if (e.from == initiator || e.to == initiator) && seenAssetsForInitiator >= 2 {
-							kind = "swap"
-						} else if toAssetId != fromAssetId {
-							kind = "dexOffer"
-						} else {
-							kind = "transfer"
-						}
-						// Fallback improvement: if initiator is involved and tx indicates cross-asset,
-						// but we couldn't find a proper reverse edge (or we paired same-asset),
-						// use tx-level from/to assets and initiatorQuote to derive counter amount.
-						if (toAssetId == fromAssetId || toAssetId == "") && txAssetsDiffer && (e.from == initiator || e.to == initiator) && hasTxTo {
-							// set toAssetId from txToAK
-							if txToAK.currency == "XRP" {
-								toAssetId = idAssetXRP()
-							} else {
-								toAssetId = idAssetIOU(normCurrency(txToAK.currency), txToAK.issuer)
-							}
-							if !initiatorQuote.IsZero() {
-								toAmt = amtAbs.Mul(initiatorQuote)
-							} else if toAmt.IsZero() {
-								toAmt = amtAbs
-							}
-						}
-						quote := decimal.Zero
-						if !amtAbs.IsZero() {
-							quote = toAmt.Div(amtAbs)
-						}
-						// sender (debit): from -> to
-						mfSend := models.CHMoneyFlowRow{
-							TxID:        txId,
-							FromID:      accFrom,
-							ToID:        accTo,
-							FromAssetID: fromAssetId,
-							ToAssetID:   toAssetId,
-							FromAmount:  amtAbs.Neg().String(),
-							ToAmount:    toAmt.String(),
-							Quote:       quote.String(),
-							Kind:        kind,
-						}
-						if row, err := json.Marshal(mfSend); err == nil {
-							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHMoneyFlows(), Key: []byte(hash), Value: row})
-						}
-						// receiver (credit): flip direction and swap asset/amounts
-						quoteInv := decimal.Zero
-						if !toAmt.IsZero() {
-							quoteInv = amtAbs.Div(toAmt)
-						}
-						mfRecv := models.CHMoneyFlowRow{
-							TxID:        txId,
-							FromID:      accTo,
-							ToID:        accFrom,
-							FromAssetID: toAssetId,
-							ToAssetID:   fromAssetId,
-							FromAmount:  toAmt.Neg().String(),
-							ToAmount:    amtAbs.String(),
-							Quote:       quoteInv.String(),
-							Kind:        kind,
-						}
-						if row, err := json.Marshal(mfRecv); err == nil {
+					for _, row := range CHMoneyFlowRows {
+						if row, err := json.Marshal(row); err == nil {
 							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHMoneyFlows(), Key: []byte(hash), Value: row})
 						}
 					}
