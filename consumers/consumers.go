@@ -298,6 +298,7 @@ func RunConsumers() {
 			if meta, ok := base["meta"].(map[string]interface{}); ok {
 				if nodes, ok := meta["AffectedNodes"].([]interface{}); ok {
 					CHMoneyFlowRows := make([]models.CHMoneyFlowRow, 0)
+					CHAccountsRows := make([]models.CHAccountRow, 0)
 
 					if account == destination {
 						amount_1_prev := decimal.NewFromFloat(0)
@@ -454,6 +455,8 @@ func RunConsumers() {
 														Quote: rate.String(),
 														Kind: "dexOffer",
 													})
+
+													CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: accountAddress})
 												}
 											}
 										}
@@ -772,6 +775,7 @@ func RunConsumers() {
 							Quote: rate.String(),
 							Kind: "swap",
 						})
+						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account})
 					} else {
 						from_id := idAccount(account)
 						to_id := idAccount(destination)
@@ -828,11 +832,20 @@ func RunConsumers() {
 							Quote: "1",
 							Kind: "transfer",
 						})
+						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account})
+						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: to_id, Address: destination})
 					}
 
 					for _, row := range CHMoneyFlowRows {
 						if row, err := json.Marshal(row); err == nil {
 							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHMoneyFlows(), Key: []byte(hash), Value: row})
+						}
+					}
+
+					for _, row := range CHAccountsRows {
+						address := row.Address
+						if row, err := json.Marshal(row); err == nil {
+							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(address), Value: row})
 						}
 					}
 				}
