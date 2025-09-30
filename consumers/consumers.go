@@ -321,6 +321,8 @@ func RunConsumers() {
 					offersByOwner := make(map[string][]offerPair)
 					balances := make(map[string]map[assetKey]decimal.Decimal)
 
+					CHMoneyFlowRows := make([]models.CHMoneyFlowRow, 0)
+
 					if account == destination {
 						amount_1_prev := decimal.NewFromFloat(0)
 						amount_1_final := decimal.NewFromFloat(0)
