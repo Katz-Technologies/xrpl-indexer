@@ -150,11 +150,20 @@ func RunConsumers() {
 				}
 			}
 			feeDrops := uint64(0)
-			if fee, ok := base["Fee"].(float64); ok {
-				feeDrops = uint64(fee)
-			} else if feeStr, ok := base["Fee"].(string); ok {
-				if v, err := strconv.ParseUint(feeStr, 10, 64); err == nil {
-					feeDrops = v
+			switch v := base["Fee"].(type) {
+			case float64:
+				feeDrops = uint64(v)
+			case int64:
+				feeDrops = uint64(v)
+			case int:
+				feeDrops = uint64(v)
+			case string:
+				if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+					feeDrops = parsed
+				}
+			case json.Number:
+				if parsed, err := v.Int64(); err == nil {
+					feeDrops = uint64(parsed)
 				}
 			}
 
@@ -419,7 +428,9 @@ func RunConsumers() {
 							
 													from_asset_id := ""
 													to_asset_id := ""
-
+		
+													takerGetsDelta.Div(takerPaysDelta)
+		
 													if prevTakerGetsCurrency == "XRP" {
 														from_asset_id = idAssetXRP()
 													} else {
@@ -431,7 +442,7 @@ func RunConsumers() {
 													} else {
 														to_asset_id = idAssetIOU(normCurrency(prevTakerPaysCurrency), prevTakerPaysIssuer)
 													}
-
+		
 													CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
 														TxID: txId,
 														FromID: from_id,
@@ -450,7 +461,7 @@ func RunConsumers() {
 		
 								}
 							}
-
+		
 							if modified, ok := node["ModifiedNode"].(map[string]interface{}); ok {
 								if final_fields, ok := modified["FinalFields"].(map[string]interface{}); ok {
 									if node_account, ok := final_fields["Account"].(string); ok {
@@ -519,7 +530,7 @@ func RunConsumers() {
 		
 											feeXRP := decimal.NewFromInt(int64(feeDrops)).Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 											diff := amount_account_final.Sub(amount_account_prev)
-
+		
 											if !diff.Add(feeXRP).IsZero() {
 												if !delta_1_filled {
 													delta_1 = diff.Add(feeXRP)
@@ -534,7 +545,7 @@ func RunConsumers() {
 											}
 										}
 									}
-
+		
 									currency_low_limit := ""
 									issuer_low_limit := ""
 		
@@ -552,7 +563,7 @@ func RunConsumers() {
 													issuer_low_limit = ""
 												}
 											}
-
+		
 											if balance, ok := final_fields["Balance"].(map[string]interface{}); ok {
 												if vs, ok := balance["value"].(string); ok {
 													if !delta_1_filled {
@@ -592,25 +603,25 @@ func RunConsumers() {
 											}
 		
 											if !delta_1_filled {
-												// if amount_1_final.IsNegative() {
-												// 	amount_1_final = amount_1_final.Neg()
-												// }
+												if amount_1_final.IsNegative() {
+													amount_1_final = amount_1_final.Neg()
+												}
 		
-												// if amount_1_prev.IsNegative() {
-												// 	amount_1_prev = amount_1_prev.Neg()
-												// }
+												if amount_1_prev.IsNegative() {
+													amount_1_prev = amount_1_prev.Neg()
+												}
 												delta_1 = amount_1_final.Sub(amount_1_prev)
 												delta_1_currency = currency_low_limit
 												delta_1_issuer = issuer_low_limit
 												delta_1_filled = true
 											} else {
-												// if amount_2_final.IsNegative() {
-												// 	amount_2_final = amount_2_final.Neg()
-												// }
+												if amount_2_final.IsNegative() {
+													amount_2_final = amount_2_final.Neg()
+												}
 		
-												// if amount_2_prev.IsNegative() {
-												// 	amount_2_prev = amount_2_prev.Neg()
-												// }
+												if amount_2_prev.IsNegative() {
+													amount_2_prev = amount_2_prev.Neg()
+												}
 												delta_2 = amount_2_final.Sub(amount_2_prev)
 												delta_2_currency = currency_low_limit
 												delta_2_issuer = issuer_low_limit
@@ -622,7 +633,7 @@ func RunConsumers() {
 										if account == low_limit["issuer"].(string) {
 											currency_high_limit := ""
 											issuer_high_limit := ""
-
+		
 											if high_limit, ok := final_fields["HighLimit"].(map[string]interface{}); ok {
 												if currency, ok := high_limit["currency"].(string); ok {
 													currency_high_limit = currency
@@ -678,25 +689,25 @@ func RunConsumers() {
 											}
 		
 											if !delta_1_filled {
-												// if amount_1_final.IsNegative() {
-												// 	amount_1_final = amount_1_final.Neg()
-												// }
+												if amount_1_final.IsNegative() {
+													amount_1_final = amount_1_final.Neg()
+												}
 		
-												// if amount_1_prev.IsNegative() {
-												// 	amount_1_prev = amount_1_prev.Neg()
-												// }
+												if amount_1_prev.IsNegative() {
+													amount_1_prev = amount_1_prev.Neg()
+												}
 												delta_1 = amount_1_final.Sub(amount_1_prev)
 												delta_1_currency = currency_high_limit
 												delta_1_issuer = issuer_high_limit
 												delta_1_filled = true
 											} else {
-												// if amount_2_final.IsNegative() {
-												// 	amount_2_final = amount_2_final.Neg()
-												// }
+												if amount_2_final.IsNegative() {
+													amount_2_final = amount_2_final.Neg()
+												}
 		
-												// if amount_2_prev.IsNegative() {
-												// 	amount_2_prev = amount_2_prev.Neg()
-												// }
+												if amount_2_prev.IsNegative() {
+													amount_2_prev = amount_2_prev.Neg()
+												}
 												delta_2 = amount_2_final.Sub(amount_2_prev)
 												delta_2_currency = currency_high_limit
 												delta_2_issuer = issuer_high_limit
@@ -707,18 +718,15 @@ func RunConsumers() {
 								}
 							}
 						}
-
+		
 						from_amount := decimal.NewFromFloat(0)
 						from_currency := ""
 						from_issuer := ""
 						to_amount := decimal.NewFromFloat(0)
 						to_currency := ""
 						to_issuer := ""
-
-						
-
 		
-						if amount_1_final.LessThan(amount_1_prev) {
+						if delta_1.LessThan(decimal.NewFromFloat(0)) {
 							from_amount = delta_1
 							from_currency = delta_1_currency
 							from_issuer = delta_1_issuer
@@ -737,16 +745,16 @@ func RunConsumers() {
 						rate := from_amount.Neg().Div(to_amount)
 						from_id := idAccount(account)
 						to_id := idAccount(destination)
-
+		
 						to_asset_id := ""
 						from_asset_id := ""
-
+		
 						if to_currency == "XRP" {
 							to_asset_id = idAssetXRP()
 						} else {
 							to_asset_id = idAssetIOU(normCurrency(to_currency), to_issuer)
 						}
-
+		
 						if from_currency == "XRP" {
 							from_asset_id = idAssetXRP()
 						} else {

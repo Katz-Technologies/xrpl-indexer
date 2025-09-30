@@ -165,7 +165,7 @@ func ReadJSONFilesFromExamples() ([]map[string]interface{}, error) {
 	var transactions []map[string]interface{}
 
 	// Ищем JSON файлы в текущей директории
-	files, err := filepath.Glob("tx_9.json")
+	files, err := filepath.Glob("tx_10.json")
 	if err != nil {
 		return nil, fmt.Errorf("ошибка при поиске JSON файлов: %v", err)
 	}
@@ -391,7 +391,6 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 				delta_2 := decimal.NewFromFloat(0)
 				delta_2_currency := ""
 				delta_2_issuer := ""
-				
 
 				delta_1_filled := false
 
@@ -506,7 +505,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 
 											// from_id := idAccount(accountAddress)
 											// to_id := idAccount(accountAddress)
-					
+
 											// from_asset_id := ""
 											// to_asset_id := ""
 
@@ -514,7 +513,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 
 											idAccount(accountAddress)
 											idAccount(accountAddress)
-					
+
 											from_asset_id := ""
 											to_asset_id := ""
 
@@ -523,7 +522,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											} else {
 												from_asset_id = idAssetIOU(normCurrency(prevTakerGetsCurrency), prevTakerGetsIssuer)
 											}
-											
+
 											if prevTakerPaysCurrency == "XRP" {
 												to_asset_id = idAssetXRP()
 											} else {
@@ -743,7 +742,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											} else {
 												amount_2_final, _ = decimal.NewFromString(vs)
 											}
-											
+
 										}
 									} else if balanceStr, ok := final_fields["Balance"].(string); ok {
 										if v, err := decimal.NewFromString(balanceStr); err == nil {
@@ -752,7 +751,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											} else {
 												amount_2_final = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 											}
-											
+
 										}
 									}
 
@@ -764,7 +763,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 												} else {
 													amount_2_prev, _ = decimal.NewFromString(vs)
 												}
-												
+
 											}
 										} else if balanceStr, ok := previous_fields["Balance"].(string); ok {
 											if v, err := decimal.NewFromString(balanceStr); err == nil {
@@ -773,7 +772,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 												} else {
 													amount_2_prev = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 												}
-												
+
 											}
 										}
 									}
