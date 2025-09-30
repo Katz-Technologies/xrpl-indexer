@@ -1,30 +1,30 @@
 {
   "transactions": [
     {
-      "tx_id": "7371c53b-d324-5d5a-ae60-1224e94dea79",
-      "hash": "D6BFA5B6177D627E876633CE54E369D53D8535C706A3D17A773EBDAAE05C7BB1",
-      "ledger_index": 99197587,
-      "close_time_unix": 1759212980,
+      "tx_id": "54122785-cd43-5e0c-92a6-4ff682a236eb",
+      "hash": "BDC4428E84BE2E2CBF8948F43434B62BECE2F73CA59C4F7AB90BFDA5541C3841",
+      "ledger_index": 99198712,
+      "close_time_unix": 1759217330,
       "tx_type": "Payment",
-      "account_id": "3e6d6e65-ef12-59bb-939e-6fc5730a8694",
-      "destination_id": "c6c7cff5-bedf-5168-b6ac-959f4ed0db56",
+      "account_id": "bb7f2539-3218-562d-85b4-e135afe2ed5a",
+      "destination_id": "bb7f2539-3218-562d-85b4-e135afe2ed5a",
       "result": "tesSUCCESS",
-      "fee_drops": 12,
-      "raw_json": "{\"Account\":\"rpUZ9BYTn58KzWxiU7booNsNbNfp2Mn4AJ\",\"Amount\":{\"_currency\":\"XRG\",\"_value\":1994.825,\"currency\":\"XRG\",\"issuer\":\"r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi\",\"value\":\"1994.825\"},\"DeliverMax\":{\"_currency\":\"XRG\",\"_value\":1994.825,\"currency\":\"XRG\",\"issuer\":\"r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi\",\"value\":\"1994.825\"},\"Destination\":\"rnGeThR5nYdBgWYvUaaDEfX5Nd3fTgXorp\",\"DestinationTag\":0,\"Fee\":12,\"LastLedgerSequence\":99197605,\"Memos\":[{\"Memo\":{\"MemoData\":\"Transaction initiated by xmagnetic.org\"}}],\"Sequence\":97579592,\"SigningPubKey\":\"024BC39863F8C8DE9D4BA9FD466AC8C91B14837BA08D8939D15EF4E0A463EC6E43\",\"SourceTag\":10011010,\"TransactionType\":\"Payment\",\"TxnSignature\":\"304502210098136D283DC63F267BF8FF36C5EE25AC42221487D15D67ACFAF557B9694D132D02200C2BE9C26CC7B862269656955A6B344EB978071B415D158EC96E518FF8BA78D2\",\"_Fee\":0.000012,\"_date\":\"2025-09-30T06:16:20Z\",\"ctid\":\"C5E9A29300340000\",\"date\":812528180,\"hash\":\"D6BFA5B6177D627E876633CE54E369D53D8535C706A3D17A773EBDAAE05C7BB1\",\"inLedger\":99197587,\"ledger_index\":99197587,\"meta\":{\"AffectedNodes\":[{\"ModifiedNode\":{\"FinalFields\":{\"Balance\":{\"currency\":\"XRG\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"3739.825\"},\"Flags\":1114112,\"HighLimit\":{\"currency\":\"XRG\",\"issuer\":\"r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi\",\"value\":\"0\"},\"HighNode\":\"7\",\"LowLimit\":{\"currency\":\"XRG\",\"issuer\":\"rnGeThR5nYdBgWYvUaaDEfX5Nd3fTgXorp\",\"value\":\"1000000000000000e-2\"},\"LowNode\":\"0\"},\"LedgerEntryType\":\"RippleState\",\"LedgerIndex\":\"1C0F6E09A71D129F68AB45BBB57E3BCB253A4C7BF16B22E1820ED0F768CFECFA\",\"PreviousFields\":{\"Balance\":{\"currency\":\"XRG\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"1745\"}},\"PreviousTxnID\":\"955EA61FF6F3A3B7E845B236AE3EB57931A9708652373A9392B7831305870E39\",\"PreviousTxnLgrSeq\":99152754}},{\"ModifiedNode\":{\"FinalFields\":{\"Balance\":{\"currency\":\"XRG\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"2725195.0547619\"},\"Flags\":1114112,\"HighLimit\":{\"currency\":\"XRG\",\"issuer\":\"r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi\",\"value\":\"0\"},\"HighNode\":\"8\",\"LowLimit\":{\"currency\":\"XRG\",\"issuer\":\"rpUZ9BYTn58KzWxiU7booNsNbNfp2Mn4AJ\",\"value\":\"98943967.7153109\"},\"LowNode\":\"0\"},\"LedgerEntryType\":\"RippleState\",\"LedgerIndex\":\"3F4766ECBC154A362899083E2C086F9F32762998C4CCEB09760B5EF64AF6D3C6\",\"PreviousFields\":{\"Balance\":{\"currency\":\"XRG\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"2727189.8797619\"}},\"PreviousTxnID\":\"8A0B4C2999E58388AFD0FAD9531196C9DF2347B82DCDDF5E9C992FA365F0ADF3\",\"PreviousTxnLgrSeq\":99177811}},{\"ModifiedNode\":{\"FinalFields\":{\"Account\":\"rpUZ9BYTn58KzWxiU7booNsNbNfp2Mn4AJ\",\"Balance\":\"4913574\",\"Flags\":0,\"OwnerCount\":4,\"Sequence\":97579593},\"LedgerEntryType\":\"AccountRoot\",\"LedgerIndex\":\"F0F02E4A547EA92F91FEE675C98803CBD88A98751ACBA5E136F74FABD9E3B629\",\"PreviousFields\":{\"Balance\":\"4913586\",\"Sequence\":97579592},\"PreviousTxnID\":\"0997686A1CE1BDBEC0BD8ADFC3C7E33DCE4B05EA5AB355055D47A56B200EE60B\",\"PreviousTxnLgrSeq\":99177837}}],\"TransactionIndex\":52,\"TransactionResult\":\"tesSUCCESS\",\"delivered_amount\":{\"_currency\":\"XRG\",\"_value\":1994.825,\"currency\":\"XRG\",\"issuer\":\"r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi\",\"value\":\"1994.825\"}},\"validated\":true}"
+      "fee_drops": 10,
+      "raw_json": "{\"Account\":\"rogue5HnPRSszD9CWGSUz8UGHMVwSSKF6\",\"Amount\":{\"_currency\":\"ANON\",\"_value\":74242.4807203804,\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rPqwWemVGUx92bnu8UxnqzU1ovgxtXMKJ5\",\"value\":\"74242.4807203804\"},\"DeliverMax\":{\"_currency\":\"ANON\",\"_value\":74242.4807203804,\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rPqwWemVGUx92bnu8UxnqzU1ovgxtXMKJ5\",\"value\":\"74242.4807203804\"},\"Destination\":\"rogue5HnPRSszD9CWGSUz8UGHMVwSSKF6\",\"Fee\":10,\"Flags\":131072,\"LastLedgerSequence\":99198713,\"SendMax\":{\"_currency\":\"RLUSD\",\"_value\":0.002787792073483348,\"currency\":\"524C555344000000000000000000000000000000\",\"issuer\":\"rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De\",\"value\":\"0.002787792073483348\"},\"Sequence\":47283713,\"SigningPubKey\":\"ED3DC1A8262390DBA0E9926050A7BE377DFCC7937CC94C5F5F24E6BD97D677BA6C\",\"TransactionType\":\"Payment\",\"TxnSignature\":\"F3D05611311C9417ED4E8EF2855B8CF4DE45659E5992944F0A181D904572C411EF4A3ADF4860FE962D151D9F3312E79EA8133B5756CDDE3DAD49692205AEF40A\",\"_Fee\":0.00001,\"_date\":\"2025-09-30T07:28:50Z\",\"ctid\":\"C5E9A6F8001C0000\",\"date\":812532530,\"hash\":\"BDC4428E84BE2E2CBF8948F43434B62BECE2F73CA59C4F7AB90BFDA5541C3841\",\"inLedger\":99198712,\"ledger_index\":99198712,\"meta\":{\"AffectedNodes\":[{\"ModifiedNode\":{\"FinalFields\":{\"Balance\":{\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"2819477932.276325\"},\"Flags\":16842752,\"HighLimit\":{\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rPqwWemVGUx92bnu8UxnqzU1ovgxtXMKJ5\",\"value\":\"0\"},\"HighNode\":\"1\",\"LowLimit\":{\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"r4vQM6BJxN8tfy587pXZhPo3FF6eJ4cUNz\",\"value\":\"0\"},\"LowNode\":\"0\"},\"LedgerEntryType\":\"RippleState\",\"LedgerIndex\":\"42906F168C8015B8B8D1FB4222A8C0F55F72ACB4566E643BA58C61F5AFF1FBA1\",\"PreviousFields\":{\"Balance\":{\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"2819552174.757045\"}},\"PreviousTxnID\":\"5A2325D1C2C31978250656C358F7468E86C3ACC231F0AC681ECA8A44D71C51BA\",\"PreviousTxnLgrSeq\":99198710}},{\"ModifiedNode\":{\"FinalFields\":{\"Balance\":{\"currency\":\"524C555344000000000000000000000000000000\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"0.000000007340740297\"},\"Flags\":1114112,\"HighLimit\":{\"currency\":\"524C555344000000000000000000000000000000\",\"issuer\":\"rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De\",\"value\":\"0\"},\"HighNode\":\"3a7\",\"LowLimit\":{\"currency\":\"524C555344000000000000000000000000000000\",\"issuer\":\"rogue5HnPRSszD9CWGSUz8UGHMVwSSKF6\",\"value\":\"9999999999999999e80\"},\"LowNode\":\"2a\"},\"LedgerEntryType\":\"RippleState\",\"LedgerIndex\":\"A92E75B22F28DBE5B8DA92B6365E02506C19727082EAF5E32E321F569131D24B\",\"PreviousFields\":{\"Balance\":{\"currency\":\"524C555344000000000000000000000000000000\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"0.002648406140211536\"}},\"PreviousTxnID\":\"630526A51681962BD649E2F5DCD6ECFD3E37BE3ED9E382169BC5BD357D2B526E\",\"PreviousTxnLgrSeq\":99198712}},{\"ModifiedNode\":{\"FinalFields\":{\"Balance\":{\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"90307.10077303472\"},\"Flags\":1114112,\"HighLimit\":{\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rPqwWemVGUx92bnu8UxnqzU1ovgxtXMKJ5\",\"value\":\"0\"},\"HighNode\":\"1\",\"LowLimit\":{\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rogue5HnPRSszD9CWGSUz8UGHMVwSSKF6\",\"value\":\"9999999999999999e79\"},\"LowNode\":\"36\"},\"LedgerEntryType\":\"RippleState\",\"LedgerIndex\":\"B4659706DD07A9AC0EC7D1EC8617584FB8AF6DD8DF009EDE01F7454638F0A7F4\",\"PreviousFields\":{\"Balance\":{\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"16064.62005265432\"}},\"PreviousTxnID\":\"AC1AB7395ADCFE353D18FF625636502825CAAAB082CFE2C98A53A9D25E9BFF00\",\"PreviousTxnLgrSeq\":99198710}},{\"ModifiedNode\":{\"FinalFields\":{\"Account\":\"rogue5HnPRSszD9CWGSUz8UGHMVwSSKF6\",\"AccountTxnID\":\"BDC4428E84BE2E2CBF8948F43434B62BECE2F73CA59C4F7AB90BFDA5541C3841\",\"Balance\":\"192241440\",\"Flags\":0,\"OwnerCount\":691,\"Sequence\":47283714},\"LedgerEntryType\":\"AccountRoot\",\"LedgerIndex\":\"E7C799A822859C2DC1CA293CB3136B6590628B19F81D5C7BA8752B49BB422E84\",\"PreviousFields\":{\"AccountTxnID\":\"630526A51681962BD649E2F5DCD6ECFD3E37BE3ED9E382169BC5BD357D2B526E\",\"Balance\":\"192241450\",\"Sequence\":47283713},\"PreviousTxnID\":\"630526A51681962BD649E2F5DCD6ECFD3E37BE3ED9E382169BC5BD357D2B526E\",\"PreviousTxnLgrSeq\":99198712}},{\"ModifiedNode\":{\"FinalFields\":{\"Balance\":{\"currency\":\"524C555344000000000000000000000000000000\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"-100.4350325485688\"},\"Flags\":16908288,\"HighLimit\":{\"currency\":\"524C555344000000000000000000000000000000\",\"issuer\":\"r4vQM6BJxN8tfy587pXZhPo3FF6eJ4cUNz\",\"value\":\"0\"},\"HighNode\":\"0\",\"LowLimit\":{\"currency\":\"524C555344000000000000000000000000000000\",\"issuer\":\"rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De\",\"value\":\"0\"},\"LowNode\":\"966\"},\"LedgerEntryType\":\"RippleState\",\"LedgerIndex\":\"EDABC329F45F8901C9FB36F6C0722301562AF2339B8F619B191D85520812E053\",\"PreviousFields\":{\"Balance\":{\"currency\":\"524C555344000000000000000000000000000000\",\"issuer\":\"rrrrrrrrrrrrrrrrrrrrBZbvji\",\"value\":\"-100.4323841497693\"}},\"PreviousTxnID\":\"5A2325D1C2C31978250656C358F7468E86C3ACC231F0AC681ECA8A44D71C51BA\",\"PreviousTxnLgrSeq\":99198710}}],\"TransactionIndex\":28,\"TransactionResult\":\"tesSUCCESS\",\"delivered_amount\":{\"_currency\":\"ANON\",\"_value\":74242.4807203804,\"currency\":\"414E4F4E00000000000000000000000000000000\",\"issuer\":\"rPqwWemVGUx92bnu8UxnqzU1ovgxtXMKJ5\",\"value\":\"74242.4807203804\"}},\"validated\":true}"
     }
   ],
   "accounts": [
     {
-      "account_id": "3e6d6e65-ef12-59bb-939e-6fc5730a8694",
-      "address": "rpUZ9BYTn58KzWxiU7booNsNbNfp2Mn4AJ"
+      "account_id": "bb7f2539-3218-562d-85b4-e135afe2ed5a",
+      "address": "rogue5HnPRSszD9CWGSUz8UGHMVwSSKF6"
     },
     {
-      "account_id": "c6c7cff5-bedf-5168-b6ac-959f4ed0db56",
-      "address": "rnGeThR5nYdBgWYvUaaDEfX5Nd3fTgXorp"
+      "account_id": "875c6842-ab58-53f6-94eb-600b61fcecec",
+      "address": "rPqwWemVGUx92bnu8UxnqzU1ovgxtXMKJ5"
     },
     {
-      "account_id": "37004b29-facb-50e7-9719-7903b71b66a0",
-      "address": "r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi"
+      "account_id": "9286412f-8f95-5676-bfcf-04792ac37a0e",
+      "address": "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De"
     }
   ],
   "assets": [
@@ -36,26 +36,19 @@
       "symbol": "XRP"
     },
     {
-      "asset_id": "3479275d-568e-5304-856d-fab9b91591ce",
+      "asset_id": "16b125b8-0f95-55f6-864a-096bb4dd1879",
       "asset_type": "IOU",
-      "currency": "XRG",
-      "issuer_id": "37004b29-facb-50e7-9719-7903b71b66a0",
-      "symbol": "XRG"
+      "currency": "414E4F4E00000000000000000000000000000000",
+      "issuer_id": "875c6842-ab58-53f6-94eb-600b61fcecec",
+      "symbol": "ANON"
+    },
+    {
+      "asset_id": "d0d3f3bf-6710-5128-be35-ccc583c94f80",
+      "asset_type": "IOU",
+      "currency": "524C555344000000000000000000000000000000",
+      "issuer_id": "9286412f-8f95-5676-bfcf-04792ac37a0e",
+      "symbol": "RLUSD"
     }
   ],
-  "money_flows": [
-    {
-      "tx_id": "7371c53b-d324-5d5a-ae60-1224e94dea79",
-      "from_id": "3e6d6e65-ef12-59bb-939e-6fc5730a8694",
-      "to_id": "c6c7cff5-bedf-5168-b6ac-959f4ed0db56",
-      "asset_id": "",
-      "amount": "",
-      "from_asset_id": "3479275d-568e-5304-856d-fab9b91591ce",
-      "to_asset_id": "3479275d-568e-5304-856d-fab9b91591ce",
-      "from_amount": "-1994.825",
-      "to_amount": "1994.825",
-      "quote": "1",
-      "kind": "transfer"
-    }
-  ]
+  "money_flows": []
 }

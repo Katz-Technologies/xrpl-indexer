@@ -165,7 +165,7 @@ func ReadJSONFilesFromExamples() ([]map[string]interface{}, error) {
 	var transactions []map[string]interface{}
 
 	// Ищем JSON файлы в текущей директории
-	files, err := filepath.Glob("tx_6.json")
+	files, err := filepath.Glob("tx_7.json")
 	if err != nil {
 		return nil, fmt.Errorf("ошибка при поиске JSON файлов: %v", err)
 	}
