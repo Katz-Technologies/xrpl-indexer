@@ -1,0 +1,72 @@
+{
+    "Account": "rJhNaxHJyvSnzMoR5dY9iDmfAFJ8MgHoAR",
+    "Amount": "130019",
+    "Destination": "rLoqnXpqVaLAMVyXMGmaKDM6wnJPexMdwd",
+    "Fee": "12",
+    "Flags": 0,
+    "LastLedgerSequence": 99197605,
+    "Memos": [
+        {
+            "Memo": {
+                "MemoData": "66306565336535622D653865372D343338382D396262652D333233356334383033353835",
+                "MemoFormat": "746578742F706C61696E",
+                "MemoType": "756E697175654964"
+            }
+        }
+    ],
+    "Sequence": 97476827,
+    "SigningPubKey": "ED942448454A79F37AD23098987E5A2CF3032B0FA65E00927E2C3786A1BA74A804",
+    "TransactionType": "Payment",
+    "TxnSignature": "B26E24202DE081D96EC30B9E5289AEFAA09826E92A8109E8FDF6CAD97016BA5C94A9A8237B0D76CEF21240D204F43C964B6FE77C474B2BE03D9F32C7C7C9DE0D",
+    "hash": "BCE72878C2F2D635957DCC9B7775DA0CC7C3899F401217CE6AF0A7493CE4A44A",
+    "DeliverMax": "130019",
+    "ctid": "C5E9A29300000000",
+    "meta": {
+        "AffectedNodes": [
+            {
+                "ModifiedNode": {
+                    "FinalFields": {
+                        "Account": "rJhNaxHJyvSnzMoR5dY9iDmfAFJ8MgHoAR",
+                        "Balance": "7690726383",
+                        "Flags": 0,
+                        "OwnerCount": 0,
+                        "Sequence": 97476828
+                    },
+                    "LedgerEntryType": "AccountRoot",
+                    "LedgerIndex": "073E3F1FDC1C2EDDDEA00FBF4F489FBEFB6455076C8A458CFD3922C81980037B",
+                    "PreviousFields": {
+                        "Balance": "7690856414",
+                        "Sequence": 97476827
+                    },
+                    "PreviousTxnID": "CC7EEB87B8A75AEE820C854C5618672FBD371785E1107A5B2D417A2EF057536D",
+                    "PreviousTxnLgrSeq": 99197571
+                }
+            },
+            {
+                "ModifiedNode": {
+                    "FinalFields": {
+                        "Account": "rLoqnXpqVaLAMVyXMGmaKDM6wnJPexMdwd",
+                        "Balance": "190289382",
+                        "Flags": 0,
+                        "OwnerCount": 0,
+                        "Sequence": 97804448
+                    },
+                    "LedgerEntryType": "AccountRoot",
+                    "LedgerIndex": "F81779B025D5E618987B4B1A885F0617F90ABFC3E5DD5DD31BFBC2D20F6AE2CC",
+                    "PreviousFields": {
+                        "Balance": "190159363"
+                    },
+                    "PreviousTxnID": "C79F2BD1D00E3EEE1BDC6E527EE2B53218986DF9BCE95EB967E50FFF39F39285",
+                    "PreviousTxnLgrSeq": 99173641
+                }
+            }
+        ],
+        "TransactionIndex": 0,
+        "TransactionResult": "tesSUCCESS",
+        "delivered_amount": "130019"
+    },
+    "validated": true,
+    "date": 812528180,
+    "ledger_index": 99197587,
+    "inLedger": 99197587
+}

@@ -166,7 +166,7 @@ func ReadJSONFilesFromExamples() ([]map[string]interface{}, error) {
 	var transactions []map[string]interface{}
 
 	// Ищем JSON файлы в текущей директории
-	files, err := filepath.Glob("tx_3.json")
+	files, err := filepath.Glob("tx_4.json")
 	if err != nil {
 		return nil, fmt.Errorf("ошибка при поиске JSON файлов: %v", err)
 	}
@@ -398,6 +398,145 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 
 				for _, n := range nodes {
 					node, _ := n.(map[string]interface{})
+
+					var modified1 map[string]interface{}
+					var ok1 bool
+					// Try ModifiedNode first, then DeletedNode
+					if modified1, ok1 = node["ModifiedNode"].(map[string]interface{}); !ok1 {
+						modified1, ok1 = node["DeletedNode"].(map[string]interface{})
+					}
+					if ok1 {
+						if ledgerEntryType, ok := modified1["LedgerEntryType"].(string); ok {
+							if ledgerEntryType == "Offer" {
+								if finalFields, ok := modified1["FinalFields"].(map[string]interface{}); ok {
+									if previousFields, ok := modified1["PreviousFields"].(map[string]interface{}); ok {
+										// Вычисляем дельту для владельца оффера
+										if account, ok := finalFields["Account"].(string); ok {
+											fmt.Printf("=== ДЕЛЬТА ДЛЯ ВЛАДЕЛЬЦА ОФФЕРА ===\n")
+											fmt.Printf("Account: %s\n", account)
+
+											// Получаем значения TakerGets (что получает владелец)
+											var prevTakerGetsValue, finalTakerGetsValue decimal.Decimal
+											var prevTakerGetsCurrency string
+											var prevTakerGetsIssuer string
+
+											// PreviousFields TakerGets
+											if prevTakerGets, exists := previousFields["TakerGets"]; exists {
+												switch v := prevTakerGets.(type) {
+												case string:
+													dec, err := decimal.NewFromString(v)
+													if err == nil {
+														prevTakerGetsValue = dec.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+													}
+													prevTakerGetsCurrency = "XRP"
+												case map[string]interface{}:
+													if currency, ok := v["currency"].(string); ok {
+														prevTakerGetsCurrency = currency
+													}
+													if issuer, ok := v["issuer"].(string); ok {
+														prevTakerGetsIssuer = issuer
+													}
+													if value, ok := v["value"].(string); ok {
+														dec, err := decimal.NewFromString(value)
+														if err == nil {
+															prevTakerGetsValue = dec
+														}
+													}
+												}
+											}
+
+											// FinalFields TakerGets
+											if finalTakerGets, exists := finalFields["TakerGets"]; exists {
+												switch v := finalTakerGets.(type) {
+												case string:
+													dec, err := decimal.NewFromString(v)
+													if err == nil {
+														finalTakerGetsValue = dec.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+													}
+												case map[string]interface{}:
+													if value, ok := v["value"].(string); ok {
+														dec, err := decimal.NewFromString(value)
+														if err == nil {
+															finalTakerGetsValue = dec
+														}
+													}
+												}
+											}
+
+											// Получаем значения TakerPays (что отдает владелец)
+											var prevTakerPaysValue, finalTakerPaysValue decimal.Decimal
+											var prevTakerPaysCurrency string
+											var prevTakerPaysIssuer string
+
+											// PreviousFields TakerPays
+											if prevTakerPays, exists := previousFields["TakerPays"]; exists {
+												switch v := prevTakerPays.(type) {
+												case string:
+													dec, err := decimal.NewFromString(v)
+													if err == nil {
+														prevTakerPaysValue = dec.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+													}
+													prevTakerPaysCurrency = "XRP"
+												case map[string]interface{}:
+													if currency, ok := v["currency"].(string); ok {
+														prevTakerPaysCurrency = currency
+													}
+													if issuer, ok := v["issuer"].(string); ok {
+														prevTakerPaysIssuer = issuer
+													}
+													if value, ok := v["value"].(string); ok {
+														dec, err := decimal.NewFromString(value)
+														if err == nil {
+															prevTakerPaysValue = dec
+														}
+													}
+												}
+											}
+
+											// FinalFields TakerPays
+											if finalTakerPays, exists := finalFields["TakerPays"]; exists {
+												switch v := finalTakerPays.(type) {
+												case string:
+													dec, err := decimal.NewFromString(v)
+													if err == nil {
+														finalTakerPaysValue = dec.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+													}
+												case map[string]interface{}:
+													if value, ok := v["value"].(string); ok {
+														dec, err := decimal.NewFromString(value)
+														if err == nil {
+															finalTakerPaysValue = dec
+														}
+													}
+												}
+											}
+
+											// Вычисляем дельты
+											takerGetsDelta := prevTakerGetsValue.Sub(finalTakerGetsValue)
+											takerPaysDelta := prevTakerPaysValue.Sub(finalTakerPaysValue)
+
+											rate := takerGetsDelta.Div(takerPaysDelta)
+
+											fmt.Printf("TakerGets Delta (владелец отдал): %s %s\n", takerGetsDelta.Neg().String(), prevTakerGetsCurrency)
+											if prevTakerGetsIssuer != "" {
+												fmt.Printf("TakerGets Issuer: %s\n", prevTakerGetsIssuer)
+											}
+
+											fmt.Printf("TakerPays Delta (владелец получил): %s %s\n", takerPaysDelta, prevTakerPaysCurrency)
+											if prevTakerPaysIssuer != "" {
+												fmt.Printf("TakerPays Issuer: %s\n", prevTakerPaysIssuer)
+											}
+
+											fmt.Printf("Rate: %s\n", rate.String())
+
+											fmt.Println("=====================================")
+										}
+									}
+								}
+							}
+
+						}
+					}
 					if modified, ok := node["ModifiedNode"].(map[string]interface{}); ok {
 						if final_fields, ok := modified["FinalFields"].(map[string]interface{}); ok {
 
@@ -428,8 +567,8 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 									}
 
 									const eps = 1e-9
-									
-									feeXRP := float64(feeDrops) / float64(models.DROPS_IN_XRP) 
+
+									feeXRP := float64(feeDrops) / float64(models.DROPS_IN_XRP)
 									diff := amount_account_final - amount_account_prev
 
 									if math.Abs(diff+feeXRP) >= eps {
@@ -487,7 +626,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 										if amount_1_final < 0 {
 											amount_1_final = amount_1_final * -1
 										}
-	
+
 										if amount_1_prev < 0 {
 											amount_1_prev = amount_1_prev * -1
 										}
@@ -497,7 +636,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 										if amount_2_final < 0 {
 											amount_2_final = amount_2_final * -1
 										}
-	
+
 										if amount_2_prev < 0 {
 											amount_2_prev = amount_2_prev * -1
 										}
@@ -550,7 +689,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 										if amount_1_final < 0 {
 											amount_1_final = amount_1_final * -1
 										}
-	
+
 										if amount_1_prev < 0 {
 											amount_1_prev = amount_1_prev * -1
 										}
@@ -560,7 +699,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 										if amount_2_final < 0 {
 											amount_2_final = amount_2_final * -1
 										}
-	
+
 										if amount_2_prev < 0 {
 											amount_2_prev = amount_2_prev * -1
 										}
@@ -594,150 +733,35 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 
 			} else {
 				fmt.Printf("=== Трансфер ===\n")
-			}
 
-			// DEX Offers
-			for _, n := range nodes {
-				node, _ := n.(map[string]interface{})
-				var modified map[string]interface{}
-				var ok bool
-				// Try ModifiedNode first, then DeletedNode
-				if modified, ok = node["ModifiedNode"].(map[string]interface{}); !ok {
-					modified, ok = node["DeletedNode"].(map[string]interface{})
-				}
-				if ok {
-					if ledgerEntryType, ok := modified["LedgerEntryType"].(string); ok {
-						if ledgerEntryType == "Offer" {
-							if finalFields, ok := modified["FinalFields"].(map[string]interface{}); ok {
-								if previousFields, ok := modified["PreviousFields"].(map[string]interface{}); ok {
-									// Вычисляем дельту для владельца оффера
-									if account, ok := finalFields["Account"].(string); ok {
-										fmt.Printf("=== ДЕЛЬТА ДЛЯ ВЛАДЕЛЬЦА ОФФЕРА ===\n")
-										fmt.Printf("Account: %s\n", account)
+				from_id := account
+				to_id := destination
 
-										// Получаем значения TakerGets (что получает владелец)
-										var prevTakerGetsValue, finalTakerGetsValue decimal.Decimal
-										var prevTakerGetsCurrency string
-										var prevTakerGetsIssuer string
+				fmt.Printf("from_id: %s\n", from_id)
+				fmt.Printf("to_id: %s\n", to_id)
 
-										// PreviousFields TakerGets
-										if prevTakerGets, exists := previousFields["TakerGets"]; exists {
-											switch v := prevTakerGets.(type) {
-											case string:
-												dec, err := decimal.NewFromString(v)
-												if err == nil {
-													prevTakerGetsValue = dec.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-												}
-												prevTakerGetsCurrency = "XRP"
-											case map[string]interface{}:
-												if currency, ok := v["currency"].(string); ok {
-													prevTakerGetsCurrency = currency
-												}
-												if issuer, ok := v["issuer"].(string); ok {
-													prevTakerGetsIssuer = issuer
-												}
-												if value, ok := v["value"].(string); ok {
-													dec, err := decimal.NewFromString(value)
-													if err == nil {
-														prevTakerGetsValue = dec
-													}
-												}
-											}
-										}
+				amount := 0.
 
-										// FinalFields TakerGets
-										if finalTakerGets, exists := finalFields["TakerGets"]; exists {
-											switch v := finalTakerGets.(type) {
-											case string:
-												dec, err := decimal.NewFromString(v)
-												if err == nil {
-														finalTakerGetsValue = dec.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-												}
-											case map[string]interface{}:
-												if value, ok := v["value"].(string); ok {
-													dec, err := decimal.NewFromString(value)
-													if err == nil {
-														finalTakerGetsValue = dec
-													}
-												}
-											}
-										}
-
-										// Получаем значения TakerPays (что отдает владелец)
-										var prevTakerPaysValue, finalTakerPaysValue decimal.Decimal
-										var prevTakerPaysCurrency string
-										var prevTakerPaysIssuer string
-
-										// PreviousFields TakerPays
-										if prevTakerPays, exists := previousFields["TakerPays"]; exists {
-											switch v := prevTakerPays.(type) {
-											case string:
-												dec, err := decimal.NewFromString(v)
-												if err == nil {
-													prevTakerPaysValue = dec.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-												}
-												prevTakerPaysCurrency = "XRP"
-											case map[string]interface{}:
-												if currency, ok := v["currency"].(string); ok {
-													prevTakerPaysCurrency = currency
-												}
-												if issuer, ok := v["issuer"].(string); ok {
-													prevTakerPaysIssuer = issuer
-												}
-												if value, ok := v["value"].(string); ok {
-													dec, err := decimal.NewFromString(value)
-													if err == nil {
-														prevTakerPaysValue = dec
-													}
-												}
-											}
-										}
-
-										// FinalFields TakerPays
-										if finalTakerPays, exists := finalFields["TakerPays"]; exists {
-											switch v := finalTakerPays.(type) {
-											case string:
-												dec, err := decimal.NewFromString(v)
-												if err == nil {
-													finalTakerPaysValue = dec.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-												}
-											case map[string]interface{}:
-												if value, ok := v["value"].(string); ok {
-													dec, err := decimal.NewFromString(value)
-													if err == nil {
-														finalTakerPaysValue = dec
-													}
-												}
-											}
-										}
-
-										// Вычисляем дельты
-										takerGetsDelta := prevTakerGetsValue.Sub(finalTakerGetsValue)
-										takerPaysDelta := prevTakerPaysValue.Sub(finalTakerPaysValue)
-
-										rate := takerGetsDelta.Div(takerPaysDelta)
-
-										fmt.Printf("TakerGets Delta (владелец отдал): %s %s\n", takerGetsDelta.Neg().String(), prevTakerGetsCurrency)
-										if prevTakerGetsIssuer != "" {
-											fmt.Printf("TakerGets Issuer: %s\n", prevTakerGetsIssuer)
-										}
-
-										fmt.Printf("TakerPays Delta (владелец получил): %s %s\n", takerPaysDelta , prevTakerPaysCurrency)
-										if prevTakerPaysIssuer != "" {
-											fmt.Printf("TakerPays Issuer: %s\n", prevTakerPaysIssuer)
-										}
-
-										fmt.Printf("Rate: %s\n", rate.String())
-
-										fmt.Println("=====================================")
-									}
-								}
-							}
-						}
-
+				switch a := base["Amount"].(type) {
+				case string:
+					// XRP: строка с целым числом drops
+					if v, err := strconv.ParseFloat(a, 64); err == nil {
+						fmt.Printf("drops: %.0f\n", v)
+						amount = v / float64(models.DROPS_IN_XRP) // обычно 1_000_000
+						fmt.Printf("amount XRP: %.6f\n", amount)
 					}
+				case map[string]interface{}:
+					// IOU / issued currency: value — строка с десятичным числом
+					if vs, ok := a["value"].(string); ok {
+						fmt.Printf("value: %s\n", vs)          // ПРАВИЛЬНО: %s для строки
+						amount, _ = strconv.ParseFloat(vs, 64) // без деления на drops
+					}
+
+				default:
+					fmt.Printf("unknown Amount type: %T\n", a)
 				}
 
+				fmt.Printf("amount: %.15f\n", amount)
 			}
 
 			type assetKey struct{ currency, issuer string }
