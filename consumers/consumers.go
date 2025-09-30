@@ -592,25 +592,25 @@ func RunConsumers() {
 											}
 		
 											if !delta_1_filled {
-												if amount_1_final.IsNegative() {
-													amount_1_final = amount_1_final.Neg()
-												}
+												// if amount_1_final.IsNegative() {
+												// 	amount_1_final = amount_1_final.Neg()
+												// }
 		
-												if amount_1_prev.IsNegative() {
-													amount_1_prev = amount_1_prev.Neg()
-												}
+												// if amount_1_prev.IsNegative() {
+												// 	amount_1_prev = amount_1_prev.Neg()
+												// }
 												delta_1 = amount_1_final.Sub(amount_1_prev)
 												delta_1_currency = currency_low_limit
 												delta_1_issuer = issuer_low_limit
 												delta_1_filled = true
 											} else {
-												if amount_2_final.IsNegative() {
-													amount_2_final = amount_2_final.Neg()
-												}
+												// if amount_2_final.IsNegative() {
+												// 	amount_2_final = amount_2_final.Neg()
+												// }
 		
-												if amount_2_prev.IsNegative() {
-													amount_2_prev = amount_2_prev.Neg()
-												}
+												// if amount_2_prev.IsNegative() {
+												// 	amount_2_prev = amount_2_prev.Neg()
+												// }
 												delta_2 = amount_2_final.Sub(amount_2_prev)
 												delta_2_currency = currency_low_limit
 												delta_2_issuer = issuer_low_limit
@@ -678,25 +678,25 @@ func RunConsumers() {
 											}
 		
 											if !delta_1_filled {
-												if amount_1_final.IsNegative() {
-													amount_1_final = amount_1_final.Neg()
-												}
+												// if amount_1_final.IsNegative() {
+												// 	amount_1_final = amount_1_final.Neg()
+												// }
 		
-												if amount_1_prev.IsNegative() {
-													amount_1_prev = amount_1_prev.Neg()
-												}
+												// if amount_1_prev.IsNegative() {
+												// 	amount_1_prev = amount_1_prev.Neg()
+												// }
 												delta_1 = amount_1_final.Sub(amount_1_prev)
 												delta_1_currency = currency_high_limit
 												delta_1_issuer = issuer_high_limit
 												delta_1_filled = true
 											} else {
-												if amount_2_final.IsNegative() {
-													amount_2_final = amount_2_final.Neg()
-												}
+												// if amount_2_final.IsNegative() {
+												// 	amount_2_final = amount_2_final.Neg()
+												// }
 		
-												if amount_2_prev.IsNegative() {
-													amount_2_prev = amount_2_prev.Neg()
-												}
+												// if amount_2_prev.IsNegative() {
+												// 	amount_2_prev = amount_2_prev.Neg()
+												// }
 												delta_2 = amount_2_final.Sub(amount_2_prev)
 												delta_2_currency = currency_high_limit
 												delta_2_issuer = issuer_high_limit
@@ -714,6 +714,9 @@ func RunConsumers() {
 						to_amount := decimal.NewFromFloat(0)
 						to_currency := ""
 						to_issuer := ""
+
+						
+
 		
 						if amount_1_final.LessThan(amount_1_prev) {
 							from_amount = delta_1

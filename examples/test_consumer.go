@@ -165,7 +165,7 @@ func ReadJSONFilesFromExamples() ([]map[string]interface{}, error) {
 	var transactions []map[string]interface{}
 
 	// Ищем JSON файлы в текущей директории
-	files, err := filepath.Glob("tx_7.json")
+	files, err := filepath.Glob("tx_9.json")
 	if err != nil {
 		return nil, fmt.Errorf("ошибка при поиске JSON файлов: %v", err)
 	}
@@ -386,7 +386,12 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 				amount_2_final := decimal.NewFromFloat(0)
 
 				delta_1 := decimal.NewFromFloat(0)
+				delta_1_currency := ""
+				delta_1_issuer := ""
 				delta_2 := decimal.NewFromFloat(0)
+				delta_2_currency := ""
+				delta_2_issuer := ""
+				
 
 				delta_1_filled := false
 
@@ -403,7 +408,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 							if ledgerEntryType == "Offer" {
 								if finalFields, ok := modified1["FinalFields"].(map[string]interface{}); ok {
 									if previousFields, ok := modified1["PreviousFields"].(map[string]interface{}); ok {
-										if _, ok := finalFields["Account"].(string); ok {
+										if accountAddress, ok := finalFields["Account"].(string); ok {
 											var prevTakerGetsValue, finalTakerGetsValue decimal.Decimal
 											var prevTakerGetsCurrency string
 											var prevTakerGetsIssuer string
@@ -497,21 +502,48 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											takerGetsDelta := prevTakerGetsValue.Sub(finalTakerGetsValue)
 											takerPaysDelta := prevTakerPaysValue.Sub(finalTakerPaysValue)
 
-											rate := takerGetsDelta.Div(takerPaysDelta)
+											// rate := takerGetsDelta.Div(takerPaysDelta)
 
-											fmt.Printf("TakerGets Delta (владелец отдал): %s %s\n", takerGetsDelta.Neg().String(), prevTakerGetsCurrency)
-											if prevTakerGetsIssuer != "" {
-												fmt.Printf("TakerGets Issuer: %s\n", prevTakerGetsIssuer)
+											// from_id := idAccount(accountAddress)
+											// to_id := idAccount(accountAddress)
+					
+											// from_asset_id := ""
+											// to_asset_id := ""
+
+											takerGetsDelta.Div(takerPaysDelta)
+
+											idAccount(accountAddress)
+											idAccount(accountAddress)
+					
+											from_asset_id := ""
+											to_asset_id := ""
+
+											if prevTakerGetsCurrency == "XRP" {
+												from_asset_id = idAssetXRP()
+											} else {
+												from_asset_id = idAssetIOU(normCurrency(prevTakerGetsCurrency), prevTakerGetsIssuer)
+											}
+											
+											if prevTakerPaysCurrency == "XRP" {
+												to_asset_id = idAssetXRP()
+											} else {
+												to_asset_id = idAssetIOU(normCurrency(prevTakerPaysCurrency), prevTakerPaysIssuer)
 											}
 
-											fmt.Printf("TakerPays Delta (владелец получил): %s %s\n", takerPaysDelta, prevTakerPaysCurrency)
-											if prevTakerPaysIssuer != "" {
-												fmt.Printf("TakerPays Issuer: %s\n", prevTakerPaysIssuer)
-											}
+											fmt.Println(from_asset_id)
+											fmt.Println(to_asset_id)
 
-											fmt.Printf("Rate: %s\n", rate.String())
-
-											fmt.Println("=====================================")
+											// CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
+											// 	TxID: txId,
+											// 	FromID: from_id,
+											// 	ToID: to_id,
+											// 	FromAssetID: from_asset_id,
+											// 	ToAssetID: to_asset_id,
+											// 	FromAmount: takerGetsDelta.Neg().String(),
+											// 	ToAmount: takerPaysDelta.String(),
+											// 	Quote: rate.String(),
+											// 	Kind: "dexOffer",
+											// })
 										}
 									}
 								}
@@ -519,19 +551,38 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 
 						}
 					}
+
 					if modified, ok := node["ModifiedNode"].(map[string]interface{}); ok {
 						if final_fields, ok := modified["FinalFields"].(map[string]interface{}); ok {
 							if node_account, ok := final_fields["Account"].(string); ok {
 								if account == node_account {
 									amount_account_final := decimal.NewFromFloat(0)
 									amount_account_prev := decimal.NewFromFloat(0)
+									currency_account := ""
+									issuer_account := ""
 									if balance, ok := final_fields["Balance"].(map[string]interface{}); ok {
 										if vs, ok := balance["value"].(string); ok {
 											amount_account_final, _ = decimal.NewFromString(vs)
 										}
+										if currency, ok := balance["currency"].(string); ok {
+											currency_account = currency
+										}
+										if issuer, ok := balance["issuer"].(string); ok {
+											issuer_account = issuer
+										}
 									} else if balanceStr, ok := final_fields["Balance"].(string); ok {
 										if v, err := decimal.NewFromString(balanceStr); err == nil {
 											amount_account_final = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+										}
+										if currency, ok := balance["currency"].(string); ok {
+											currency_account = currency
+										} else {
+											currency_account = "XRP"
+										}
+										if issuer, ok := balance["issuer"].(string); ok {
+											issuer_account = issuer
+										} else {
+											issuer_account = ""
 										}
 									}
 
@@ -540,9 +591,29 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											if vs, ok := balance["value"].(string); ok {
 												amount_account_prev, _ = decimal.NewFromString(vs)
 											}
+											if currency, ok := balance["currency"].(string); ok {
+												currency_account = currency
+											} else {
+												currency_account = "XRP"
+											}
+											if issuer, ok := balance["issuer"].(string); ok {
+												issuer_account = issuer
+											} else {
+												issuer_account = ""
+											}
 										} else if balanceStr, ok := previous_fields["Balance"].(string); ok {
 											if v, err := decimal.NewFromString(balanceStr); err == nil {
 												amount_account_prev = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+											}
+											if currency, ok := balance["currency"].(string); ok {
+												currency_account = currency
+											} else {
+												currency_account = "XRP"
+											}
+											if issuer, ok := balance["issuer"].(string); ok {
+												issuer_account = issuer
+											} else {
+												issuer_account = ""
 											}
 										}
 									}
@@ -553,16 +624,36 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 									if !diff.Add(feeXRP).IsZero() {
 										if !delta_1_filled {
 											delta_1 = diff.Add(feeXRP)
+											delta_1_currency = currency_account
+											delta_1_issuer = issuer_account
 											delta_1_filled = true
 										} else {
 											delta_2 = diff.Add(feeXRP)
+											delta_2_currency = currency_account
+											delta_2_issuer = issuer_account
 										}
 									}
 								}
 							}
 
+							currency_low_limit := ""
+							issuer_low_limit := ""
+
 							if high_limit, ok := final_fields["HighLimit"].(map[string]interface{}); ok {
 								if account == high_limit["issuer"].(string) {
+									if low_limit, ok := final_fields["LowLimit"].(map[string]interface{}); ok {
+										if currency, ok := low_limit["currency"].(string); ok {
+											currency_low_limit = currency
+										} else {
+											currency_low_limit = "XRP"
+										}
+										if issuer, ok := low_limit["issuer"].(string); ok {
+											issuer_low_limit = issuer
+										} else {
+											issuer_low_limit = ""
+										}
+									}
+
 									if balance, ok := final_fields["Balance"].(map[string]interface{}); ok {
 										if vs, ok := balance["value"].(string); ok {
 											if !delta_1_filled {
@@ -610,6 +701,8 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											amount_1_prev = amount_1_prev.Neg()
 										}
 										delta_1 = amount_1_final.Sub(amount_1_prev)
+										delta_1_currency = currency_low_limit
+										delta_1_issuer = issuer_low_limit
 										delta_1_filled = true
 									} else {
 										if amount_2_final.IsNegative() {
@@ -620,12 +713,29 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											amount_2_prev = amount_2_prev.Neg()
 										}
 										delta_2 = amount_2_final.Sub(amount_2_prev)
+										delta_2_currency = currency_low_limit
+										delta_2_issuer = issuer_low_limit
 									}
 								}
 							}
 
 							if low_limit, ok := final_fields["LowLimit"].(map[string]interface{}); ok {
 								if account == low_limit["issuer"].(string) {
+									currency_high_limit := ""
+									issuer_high_limit := ""
+
+									if high_limit, ok := final_fields["HighLimit"].(map[string]interface{}); ok {
+										if currency, ok := high_limit["currency"].(string); ok {
+											currency_high_limit = currency
+										} else {
+											currency_high_limit = "XRP"
+										}
+										if issuer, ok := high_limit["issuer"].(string); ok {
+											issuer_high_limit = issuer
+										} else {
+											issuer_high_limit = ""
+										}
+									}
 									if balance, ok := final_fields["Balance"].(map[string]interface{}); ok {
 										if vs, ok := balance["value"].(string); ok {
 											if !delta_1_filled {
@@ -633,6 +743,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											} else {
 												amount_2_final, _ = decimal.NewFromString(vs)
 											}
+											
 										}
 									} else if balanceStr, ok := final_fields["Balance"].(string); ok {
 										if v, err := decimal.NewFromString(balanceStr); err == nil {
@@ -641,6 +752,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											} else {
 												amount_2_final = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 											}
+											
 										}
 									}
 
@@ -652,6 +764,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 												} else {
 													amount_2_prev, _ = decimal.NewFromString(vs)
 												}
+												
 											}
 										} else if balanceStr, ok := previous_fields["Balance"].(string); ok {
 											if v, err := decimal.NewFromString(balanceStr); err == nil {
@@ -660,6 +773,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 												} else {
 													amount_2_prev = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 												}
+												
 											}
 										}
 									}
@@ -673,6 +787,8 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											amount_1_prev = amount_1_prev.Neg()
 										}
 										delta_1 = amount_1_final.Sub(amount_1_prev)
+										delta_1_currency = currency_high_limit
+										delta_1_issuer = issuer_high_limit
 										delta_1_filled = true
 									} else {
 										if amount_2_final.IsNegative() {
@@ -683,6 +799,8 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 											amount_2_prev = amount_2_prev.Neg()
 										}
 										delta_2 = amount_2_final.Sub(amount_2_prev)
+										delta_2_currency = currency_high_limit
+										delta_2_issuer = issuer_high_limit
 									}
 								}
 							}
@@ -692,17 +810,51 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 				}
 
 				from_amount := decimal.NewFromFloat(0)
+				from_currency := ""
+				from_issuer := ""
 				to_amount := decimal.NewFromFloat(0)
+				to_currency := ""
+				to_issuer := ""
 
-				if amount_1_final.LessThan(amount_1_prev) {
+				if delta_1.LessThan(decimal.NewFromFloat(0)) {
 					from_amount = delta_1
+					from_currency = delta_1_currency
+					from_issuer = delta_1_issuer
 					to_amount = delta_2
+					to_currency = delta_2_currency
+					to_issuer = delta_2_issuer
 				} else {
 					from_amount = delta_2
+					from_currency = delta_2_currency
+					from_issuer = delta_2_issuer
 					to_amount = delta_1
+					to_currency = delta_1_currency
+					to_issuer = delta_1_issuer
 				}
 
 				rate := from_amount.Neg().Div(to_amount)
+				idAccount(account)
+				idAccount(destination)
+
+				to_asset_id := ""
+				from_asset_id := ""
+
+				if to_currency == "XRP" {
+					to_asset_id = idAssetXRP()
+				} else {
+					to_asset_id = idAssetIOU(normCurrency(to_currency), to_issuer)
+				}
+
+				if from_currency == "XRP" {
+					from_asset_id = idAssetXRP()
+				} else {
+					from_asset_id = idAssetIOU(normCurrency(from_currency), from_issuer)
+				}
+
+				fmt.Println(to_asset_id)
+				fmt.Println(from_asset_id)
+
+				// rate := from_amount.Neg().Div(to_amount)
 				fmt.Printf("=== ДЕЛЬТА ДЛЯ ИНИЦИАТОРА СВАПА ===\n")
 				fmt.Printf("Account: %s\n", account)
 				fmt.Printf("from_amount: %s\n", from_amount.Truncate(15).String())
