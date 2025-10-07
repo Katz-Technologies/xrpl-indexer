@@ -140,6 +140,7 @@ func RunConsumers() {
 			account, _ := base["Account"].(string)
 			destination, _ := base["Destination"].(string)
 			result := ""
+			inLedgerIndex := float64(0)
 			if meta, ok := base["meta"].(map[string]interface{}); ok {
 				if r, ok := meta["TransactionResult"].(string); ok {
 					if r == "tesSUCCESS" {
@@ -147,6 +148,9 @@ func RunConsumers() {
 					} else {
 						continue
 					}
+				}
+				if ti, ok := meta["TransactionIndex"].(float64); ok {
+					inLedgerIndex = ti
 				}
 			}
 			feeDrops := uint64(0)
@@ -183,6 +187,7 @@ func RunConsumers() {
 				Result:        result,
 				FeeDrops:      feeDrops,
 				RawJSON:       string(b),
+				InLedgerIndex: uint32(inLedgerIndex),
 			}
 			if row, err := json.Marshal(txRow); err == nil {
 				_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHTransactions(), Key: []byte(hash), Value: row})
@@ -303,17 +308,17 @@ func RunConsumers() {
 					if account == destination {
 						amount_1_prev := decimal.NewFromFloat(0)
 						amount_1_final := decimal.NewFromFloat(0)
-		
+
 						amount_2_prev := decimal.NewFromFloat(0)
 						amount_2_final := decimal.NewFromFloat(0)
-		
+
 						delta_1 := decimal.NewFromFloat(0)
 						delta_1_currency := ""
 						delta_1_issuer := ""
 						delta_2 := decimal.NewFromFloat(0)
 						delta_2_currency := ""
 						delta_2_issuer := ""
-		
+
 						delta_1_filled := false
 						for _, n := range nodes {
 							node, _ := n.(map[string]interface{})
@@ -332,7 +337,7 @@ func RunConsumers() {
 													var prevTakerGetsValue, finalTakerGetsValue decimal.Decimal
 													var prevTakerGetsCurrency string
 													var prevTakerGetsIssuer string
-		
+
 													if prevTakerGets, exists := previousFields["TakerGets"]; exists {
 														switch v := prevTakerGets.(type) {
 														case string:
@@ -356,7 +361,7 @@ func RunConsumers() {
 															}
 														}
 													}
-		
+
 													if finalTakerGets, exists := finalFields["TakerGets"]; exists {
 														switch v := finalTakerGets.(type) {
 														case string:
@@ -373,11 +378,11 @@ func RunConsumers() {
 															}
 														}
 													}
-		
+
 													var prevTakerPaysValue, finalTakerPaysValue decimal.Decimal
 													var prevTakerPaysCurrency string
 													var prevTakerPaysIssuer string
-		
+
 													if prevTakerPays, exists := previousFields["TakerPays"]; exists {
 														switch v := prevTakerPays.(type) {
 														case string:
@@ -401,7 +406,7 @@ func RunConsumers() {
 															}
 														}
 													}
-		
+
 													if finalTakerPays, exists := finalFields["TakerPays"]; exists {
 														switch v := finalTakerPays.(type) {
 														case string:
@@ -418,42 +423,42 @@ func RunConsumers() {
 															}
 														}
 													}
-		
+
 													takerGetsDelta := prevTakerGetsValue.Sub(finalTakerGetsValue)
 													takerPaysDelta := prevTakerPaysValue.Sub(finalTakerPaysValue)
-		
+
 													rate := takerGetsDelta.Div(takerPaysDelta)
-		
+
 													from_id := idAccount(accountAddress)
 													to_id := idAccount(accountAddress)
-							
+
 													from_asset_id := ""
 													to_asset_id := ""
-		
+
 													takerGetsDelta.Div(takerPaysDelta)
-		
+
 													if prevTakerGetsCurrency == "XRP" {
 														from_asset_id = idAssetXRP()
 													} else {
 														from_asset_id = idAssetIOU(normCurrency(prevTakerGetsCurrency), prevTakerGetsIssuer)
 													}
-													
+
 													if prevTakerPaysCurrency == "XRP" {
 														to_asset_id = idAssetXRP()
 													} else {
 														to_asset_id = idAssetIOU(normCurrency(prevTakerPaysCurrency), prevTakerPaysIssuer)
 													}
-		
+
 													CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-														TxID: txId,
-														FromID: from_id,
-														ToID: to_id,
+														TxID:        txId,
+														FromID:      from_id,
+														ToID:        to_id,
 														FromAssetID: from_asset_id,
-														ToAssetID: to_asset_id,
-														FromAmount: takerGetsDelta.Neg().String(),
-														ToAmount: takerPaysDelta.String(),
-														Quote: rate.String(),
-														Kind: "dexOffer",
+														ToAssetID:   to_asset_id,
+														FromAmount:  takerGetsDelta.Neg().String(),
+														ToAmount:    takerPaysDelta.String(),
+														Quote:       rate.String(),
+														Kind:        "dexOffer",
 													})
 
 													CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: accountAddress})
@@ -461,10 +466,10 @@ func RunConsumers() {
 											}
 										}
 									}
-		
+
 								}
 							}
-		
+
 							if modified, ok := node["ModifiedNode"].(map[string]interface{}); ok {
 								if final_fields, ok := modified["FinalFields"].(map[string]interface{}); ok {
 									if node_account, ok := final_fields["Account"].(string); ok {
@@ -498,7 +503,7 @@ func RunConsumers() {
 													issuer_account = ""
 												}
 											}
-		
+
 											if previous_fields, ok := modified["PreviousFields"].(map[string]interface{}); ok {
 												if balance, ok := previous_fields["Balance"].(map[string]interface{}); ok {
 													if vs, ok := balance["value"].(string); ok {
@@ -530,10 +535,10 @@ func RunConsumers() {
 													}
 												}
 											}
-		
+
 											feeXRP := decimal.NewFromInt(int64(feeDrops)).Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 											diff := amount_account_final.Sub(amount_account_prev)
-		
+
 											if !diff.Add(feeXRP).IsZero() {
 												if !delta_1_filled {
 													delta_1 = diff.Add(feeXRP)
@@ -548,10 +553,10 @@ func RunConsumers() {
 											}
 										}
 									}
-		
+
 									currency_low_limit := ""
 									issuer_low_limit := ""
-		
+
 									if high_limit, ok := final_fields["HighLimit"].(map[string]interface{}); ok {
 										if account == high_limit["issuer"].(string) {
 											if low_limit, ok := final_fields["LowLimit"].(map[string]interface{}); ok {
@@ -566,7 +571,7 @@ func RunConsumers() {
 													issuer_low_limit = ""
 												}
 											}
-		
+
 											if balance, ok := final_fields["Balance"].(map[string]interface{}); ok {
 												if vs, ok := balance["value"].(string); ok {
 													if !delta_1_filled {
@@ -584,7 +589,7 @@ func RunConsumers() {
 													}
 												}
 											}
-		
+
 											if previous_fields, ok := modified["PreviousFields"].(map[string]interface{}); ok {
 												if balance, ok := previous_fields["Balance"].(map[string]interface{}); ok {
 													if vs, ok := balance["value"].(string); ok {
@@ -604,12 +609,12 @@ func RunConsumers() {
 													}
 												}
 											}
-		
+
 											if !delta_1_filled {
 												if amount_1_final.IsNegative() {
 													amount_1_final = amount_1_final.Neg()
 												}
-		
+
 												if amount_1_prev.IsNegative() {
 													amount_1_prev = amount_1_prev.Neg()
 												}
@@ -621,7 +626,7 @@ func RunConsumers() {
 												if amount_2_final.IsNegative() {
 													amount_2_final = amount_2_final.Neg()
 												}
-		
+
 												if amount_2_prev.IsNegative() {
 													amount_2_prev = amount_2_prev.Neg()
 												}
@@ -631,12 +636,12 @@ func RunConsumers() {
 											}
 										}
 									}
-		
+
 									if low_limit, ok := final_fields["LowLimit"].(map[string]interface{}); ok {
 										if account == low_limit["issuer"].(string) {
 											currency_high_limit := ""
 											issuer_high_limit := ""
-		
+
 											if high_limit, ok := final_fields["HighLimit"].(map[string]interface{}); ok {
 												if currency, ok := high_limit["currency"].(string); ok {
 													currency_high_limit = currency
@@ -656,7 +661,7 @@ func RunConsumers() {
 													} else {
 														amount_2_final, _ = decimal.NewFromString(vs)
 													}
-													
+
 												}
 											} else if balanceStr, ok := final_fields["Balance"].(string); ok {
 												if v, err := decimal.NewFromString(balanceStr); err == nil {
@@ -665,10 +670,10 @@ func RunConsumers() {
 													} else {
 														amount_2_final = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 													}
-													
+
 												}
 											}
-		
+
 											if previous_fields, ok := modified["PreviousFields"].(map[string]interface{}); ok {
 												if balance, ok := previous_fields["Balance"].(map[string]interface{}); ok {
 													if vs, ok := balance["value"].(string); ok {
@@ -677,7 +682,7 @@ func RunConsumers() {
 														} else {
 															amount_2_prev, _ = decimal.NewFromString(vs)
 														}
-														
+
 													}
 												} else if balanceStr, ok := previous_fields["Balance"].(string); ok {
 													if v, err := decimal.NewFromString(balanceStr); err == nil {
@@ -686,16 +691,16 @@ func RunConsumers() {
 														} else {
 															amount_2_prev = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 														}
-														
+
 													}
 												}
 											}
-		
+
 											if !delta_1_filled {
 												if amount_1_final.IsNegative() {
 													amount_1_final = amount_1_final.Neg()
 												}
-		
+
 												if amount_1_prev.IsNegative() {
 													amount_1_prev = amount_1_prev.Neg()
 												}
@@ -707,7 +712,7 @@ func RunConsumers() {
 												if amount_2_final.IsNegative() {
 													amount_2_final = amount_2_final.Neg()
 												}
-		
+
 												if amount_2_prev.IsNegative() {
 													amount_2_prev = amount_2_prev.Neg()
 												}
@@ -717,18 +722,18 @@ func RunConsumers() {
 											}
 										}
 									}
-		
+
 								}
 							}
 						}
-		
+
 						from_amount := decimal.NewFromFloat(0)
 						from_currency := ""
 						from_issuer := ""
 						to_amount := decimal.NewFromFloat(0)
 						to_currency := ""
 						to_issuer := ""
-		
+
 						if delta_1.LessThan(decimal.NewFromFloat(0)) {
 							from_amount = delta_1
 							from_currency = delta_1_currency
@@ -744,20 +749,20 @@ func RunConsumers() {
 							to_currency = delta_1_currency
 							to_issuer = delta_1_issuer
 						}
-		
+
 						rate := from_amount.Neg().Div(to_amount)
 						from_id := idAccount(account)
 						to_id := idAccount(destination)
-		
+
 						to_asset_id := ""
 						from_asset_id := ""
-		
+
 						if to_currency == "XRP" {
 							to_asset_id = idAssetXRP()
 						} else {
 							to_asset_id = idAssetIOU(normCurrency(to_currency), to_issuer)
 						}
-		
+
 						if from_currency == "XRP" {
 							from_asset_id = idAssetXRP()
 						} else {
@@ -765,15 +770,15 @@ func RunConsumers() {
 						}
 
 						CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-							TxID: txId,
-							FromID: from_id,
-							ToID: to_id,
+							TxID:        txId,
+							FromID:      from_id,
+							ToID:        to_id,
 							FromAssetID: from_asset_id,
-							ToAssetID: to_asset_id,
-							FromAmount: from_amount.String(),
-							ToAmount: to_amount.String(),
-							Quote: rate.String(),
-							Kind: "swap",
+							ToAssetID:   to_asset_id,
+							FromAmount:  from_amount.String(),
+							ToAmount:    to_amount.String(),
+							Quote:       rate.String(),
+							Kind:        "swap",
 						})
 						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account})
 					} else {
@@ -782,7 +787,7 @@ func RunConsumers() {
 
 						from_asset_id := ""
 						to_asset_id := ""
-		
+
 						amount := decimal.NewFromFloat(0)
 						amount_issuer := ""
 						amount_currency := ""
@@ -808,7 +813,7 @@ func RunConsumers() {
 								amount_currency = ""
 							}
 						}
-						
+
 						if amount_currency == "XRP" {
 							from_asset_id = idAssetXRP()
 						} else {
@@ -822,15 +827,15 @@ func RunConsumers() {
 						}
 
 						CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-							TxID: txId,
-							FromID: from_id,
-							ToID: to_id,
+							TxID:        txId,
+							FromID:      from_id,
+							ToID:        to_id,
 							FromAssetID: from_asset_id,
-							ToAssetID: to_asset_id,
-							FromAmount: amount.Neg().String(),
-							ToAmount: amount.String(),
-							Quote: "1",
-							Kind: "transfer",
+							ToAssetID:   to_asset_id,
+							FromAmount:  amount.Neg().String(),
+							ToAmount:    amount.String(),
+							Quote:       "1",
+							Kind:        "transfer",
 						})
 						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account})
 						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: to_id, Address: destination})

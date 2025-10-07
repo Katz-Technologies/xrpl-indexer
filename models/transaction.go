@@ -329,6 +329,7 @@ type CHTransactionRow struct {
 	Result        string `json:"result"`
 	FeeDrops      uint64 `json:"fee_drops"`
 	RawJSON       string `json:"raw_json"`
+	InLedgerIndex uint32 `json:"in_ledger_index"`
 }
 
 type CHAccountRow struct {
