@@ -23,7 +23,9 @@ import (
 var emittedAssets sync.Map
 
 // Вспомогательные функции для генерации ID
-func idTx(hash string) string { return uuid.NewSHA1(uuid.NameSpaceURL, []byte("tx:"+hash)).String() }
+func idTx(hash string, consumer string) string {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("tx:"+hash+":"+consumer)).String()
+}
 func idAccount(addr string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("acct:"+addr)).String()
 }
@@ -255,7 +257,7 @@ func ProcessTransaction(tx map[string]interface{}) (*TestResults, error) {
 		}
 	}
 
-	txId := idTx(hash)
+	txId := idTx(hash, account)
 	accountId := idAccount(account)
 	destId := idAccount(destination)
 	const rippleToUnix int64 = 946684800

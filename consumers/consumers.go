@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
@@ -18,13 +18,11 @@ import (
 	"github.com/xrpscan/platform/models"
 )
 
-var emittedAssets sync.Map
-
 func idTx(hash string) string { return uuid.NewSHA1(uuid.NameSpaceURL, []byte("tx:"+hash)).String() }
 func idAccount(addr string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("acct:"+addr)).String()
 }
-func idAssetXRP() string { return uuid.NewSHA1(uuid.NameSpaceURL, []byte("asset:XRP::")).String() }
+func idAssetXRP() string { return "7ab3a23b-28ba-5fb4-aac1-b3546017b182" }
 func idAssetIOU(currency, issuer string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("asset:IOU:"+currency+":"+issuer)).String()
 }
@@ -70,6 +68,11 @@ func symbolFromCurrencyMap(m map[string]interface{}) string {
 }
 
 func normCurrency(c string) string { return strings.ToUpper(c) }
+
+// generateVersion creates a timestamp-based version for ReplacingMergeTree deduplication
+func generateVersion() uint64 {
+	return uint64(time.Now().UnixNano())
+}
 
 func RunConsumer(conn *kafka.Reader, callback func(m kafka.Message)) {
 	ctx := context.Background()
@@ -188,40 +191,24 @@ func RunConsumers() {
 				FeeDrops:      feeDrops,
 				RawJSON:       string(b),
 				InLedgerIndex: uint32(inLedgerIndex),
+				Version:       generateVersion(),
 			}
 			if row, err := json.Marshal(txRow); err == nil {
 				_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHTransactions(), Key: []byte(hash), Value: row})
 			}
 
-			if _, loaded := emittedAssets.LoadOrStore("XRP", true); !loaded {
-				xrpRow := models.CHAssetRow{
-					AssetID:   idAssetXRP(),
-					AssetType: "XRP",
-					Currency:  "XRP",
-					IssuerID:  uuid.Nil.String(),
-					Symbol:    "XRP",
-				}
-				if row, err := json.Marshal(xrpRow); err == nil {
-					_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte("XRP"), Value: row})
-				}
-			}
-
 			if account != "" {
 				aid := idAccount(account)
-				if _, loaded := emittedAssets.LoadOrStore("acc:"+account, true); !loaded {
-					ar := models.CHAccountRow{AccountID: aid, Address: account}
-					if row, err := json.Marshal(ar); err == nil {
-						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(account), Value: row})
-					}
+				ar := models.CHAccountRow{AccountID: aid, Address: account, Version: generateVersion()}
+				if row, err := json.Marshal(ar); err == nil {
+					_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(account), Value: row})
 				}
 			}
 			if destination != "" {
 				did := idAccount(destination)
-				if _, loaded := emittedAssets.LoadOrStore("acc:"+destination, true); !loaded {
-					dr := models.CHAccountRow{AccountID: did, Address: destination}
-					if row, err := json.Marshal(dr); err == nil {
-						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(destination), Value: row})
-					}
+				dr := models.CHAccountRow{AccountID: did, Address: destination, Version: generateVersion()}
+				if row, err := json.Marshal(dr); err == nil {
+					_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(destination), Value: row})
 				}
 			}
 
@@ -233,19 +220,15 @@ func RunConsumers() {
 				if cur != "" && iss != "" {
 					issuersByCurrency[cur] = iss
 					assetKey := "IOU:" + cur + ":" + iss
-					if _, loaded := emittedAssets.LoadOrStore(assetKey, true); !loaded {
-						sym := symbolFromCurrencyMap(amt)
-						issuerUUID := idAccount(iss)
-						assetRow := models.CHAssetRow{AssetID: idAssetIOU(cur, iss), AssetType: "IOU", Currency: cur, IssuerID: issuerUUID, Symbol: sym}
-						if row, err := json.Marshal(assetRow); err == nil {
-							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte(assetKey), Value: row})
-						}
-						if _, loaded2 := emittedAssets.LoadOrStore("acc:"+iss, true); !loaded2 {
-							ar := models.CHAccountRow{AccountID: issuerUUID, Address: iss}
-							if row2, err2 := json.Marshal(ar); err2 == nil {
-								_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(iss), Value: row2})
-							}
-						}
+					sym := symbolFromCurrencyMap(amt)
+					issuerUUID := idAccount(iss)
+					assetRow := models.CHAssetRow{AssetID: idAssetIOU(cur, iss), AssetType: "IOU", Currency: cur, IssuerID: issuerUUID, Symbol: sym, Version: generateVersion()}
+					if row, err := json.Marshal(assetRow); err == nil {
+						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte(assetKey), Value: row})
+					}
+					ar := models.CHAccountRow{AccountID: issuerUUID, Address: iss, Version: generateVersion()}
+					if row2, err2 := json.Marshal(ar); err2 == nil {
+						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(iss), Value: row2})
 					}
 				}
 			}
@@ -258,19 +241,15 @@ func RunConsumers() {
 						issuersByCurrency[cur] = iss
 					}
 					assetKey := "IOU:" + cur + ":" + iss
-					if _, loaded := emittedAssets.LoadOrStore(assetKey, true); !loaded {
-						sym := symbolFromCurrencyMap(sm)
-						issuerUUID := idAccount(iss)
-						assetRow := models.CHAssetRow{AssetID: idAssetIOU(cur, iss), AssetType: "IOU", Currency: cur, IssuerID: issuerUUID, Symbol: sym}
-						if row, err := json.Marshal(assetRow); err == nil {
-							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte(assetKey), Value: row})
-						}
-						if _, loaded2 := emittedAssets.LoadOrStore("acc:"+iss, true); !loaded2 {
-							ar := models.CHAccountRow{AccountID: issuerUUID, Address: iss}
-							if row2, err2 := json.Marshal(ar); err2 == nil {
-								_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(iss), Value: row2})
-							}
-						}
+					sym := symbolFromCurrencyMap(sm)
+					issuerUUID := idAccount(iss)
+					assetRow := models.CHAssetRow{AssetID: idAssetIOU(cur, iss), AssetType: "IOU", Currency: cur, IssuerID: issuerUUID, Symbol: sym, Version: generateVersion()}
+					if row, err := json.Marshal(assetRow); err == nil {
+						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte(assetKey), Value: row})
+					}
+					ar := models.CHAccountRow{AccountID: issuerUUID, Address: iss, Version: generateVersion()}
+					if row2, err2 := json.Marshal(ar); err2 == nil {
+						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(iss), Value: row2})
 					}
 				}
 			}
@@ -282,19 +261,15 @@ func RunConsumers() {
 					if cur != "" && iss != "" {
 						issuersByCurrency[cur] = iss
 						assetKey := "IOU:" + cur + ":" + iss
-						if _, loaded := emittedAssets.LoadOrStore(assetKey, true); !loaded {
-							sym := symbolFromCurrencyMap(da)
-							issuerUUID := idAccount(iss)
-							assetRow := models.CHAssetRow{AssetID: idAssetIOU(cur, iss), AssetType: "IOU", Currency: cur, IssuerID: issuerUUID, Symbol: sym}
-							if row, err := json.Marshal(assetRow); err == nil {
-								_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte(assetKey), Value: row})
-							}
-							if _, loaded2 := emittedAssets.LoadOrStore("acc:"+iss, true); !loaded2 {
-								ar := models.CHAccountRow{AccountID: issuerUUID, Address: iss}
-								if row2, err2 := json.Marshal(ar); err2 == nil {
-									_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(iss), Value: row2})
-								}
-							}
+						sym := symbolFromCurrencyMap(da)
+						issuerUUID := idAccount(iss)
+						assetRow := models.CHAssetRow{AssetID: idAssetIOU(cur, iss), AssetType: "IOU", Currency: cur, IssuerID: issuerUUID, Symbol: sym, Version: generateVersion()}
+						if row, err := json.Marshal(assetRow); err == nil {
+							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte(assetKey), Value: row})
+						}
+						ar := models.CHAccountRow{AccountID: issuerUUID, Address: iss, Version: generateVersion()}
+						if row2, err2 := json.Marshal(ar); err2 == nil {
+							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(iss), Value: row2})
 						}
 					}
 				}
@@ -334,7 +309,7 @@ func RunConsumers() {
 										if finalFields, ok := modified1["FinalFields"].(map[string]interface{}); ok {
 											if previousFields, ok := modified1["PreviousFields"].(map[string]interface{}); ok {
 												if accountAddress, ok := finalFields["Account"].(string); ok {
-													var prevTakerGetsValue, finalTakerGetsValue decimal.Decimal
+													var prevTakerGetsValue, finalTakerGetsValue decimal.Decimal = decimal.Zero, decimal.Zero
 													var prevTakerGetsCurrency string
 													var prevTakerGetsIssuer string
 
@@ -379,7 +354,7 @@ func RunConsumers() {
 														}
 													}
 
-													var prevTakerPaysValue, finalTakerPaysValue decimal.Decimal
+													var prevTakerPaysValue, finalTakerPaysValue decimal.Decimal = decimal.Zero, decimal.Zero
 													var prevTakerPaysCurrency string
 													var prevTakerPaysIssuer string
 
@@ -427,15 +402,18 @@ func RunConsumers() {
 													takerGetsDelta := prevTakerGetsValue.Sub(finalTakerGetsValue)
 													takerPaysDelta := prevTakerPaysValue.Sub(finalTakerPaysValue)
 
-													rate := takerGetsDelta.Div(takerPaysDelta)
+													var rate decimal.Decimal = decimal.Zero
+													if takerPaysDelta.IsZero() {
+														rate = decimal.Zero
+													} else {
+														rate = takerGetsDelta.Div(takerPaysDelta)
+													}
 
 													from_id := idAccount(accountAddress)
 													to_id := idAccount(accountAddress)
 
 													from_asset_id := ""
 													to_asset_id := ""
-
-													takerGetsDelta.Div(takerPaysDelta)
 
 													if prevTakerGetsCurrency == "XRP" {
 														from_asset_id = idAssetXRP()
@@ -459,9 +437,10 @@ func RunConsumers() {
 														ToAmount:    takerPaysDelta.String(),
 														Quote:       rate.String(),
 														Kind:        "dexOffer",
+														Version:     generateVersion(),
 													})
 
-													CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: accountAddress})
+													CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: accountAddress, Version: generateVersion()})
 												}
 											}
 										}
@@ -750,7 +729,12 @@ func RunConsumers() {
 							to_issuer = delta_1_issuer
 						}
 
-						rate := from_amount.Neg().Div(to_amount)
+						var rate decimal.Decimal = decimal.Zero
+						if to_amount.IsZero() {
+							rate = decimal.Zero
+						} else {
+							rate = from_amount.Neg().Div(to_amount)
+						}
 						from_id := idAccount(account)
 						to_id := idAccount(destination)
 
@@ -779,8 +763,9 @@ func RunConsumers() {
 							ToAmount:    to_amount.String(),
 							Quote:       rate.String(),
 							Kind:        "swap",
+							Version:     generateVersion(),
 						})
-						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account})
+						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account, Version: generateVersion()})
 					} else {
 						from_id := idAccount(account)
 						to_id := idAccount(destination)
@@ -836,9 +821,10 @@ func RunConsumers() {
 							ToAmount:    amount.String(),
 							Quote:       "1",
 							Kind:        "transfer",
+							Version:     generateVersion(),
 						})
-						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account})
-						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: to_id, Address: destination})
+						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account, Version: generateVersion()})
+						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: to_id, Address: destination, Version: generateVersion()})
 					}
 
 					for _, row := range CHMoneyFlowRows {

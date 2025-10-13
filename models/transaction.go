@@ -330,11 +330,13 @@ type CHTransactionRow struct {
 	FeeDrops      uint64 `json:"fee_drops"`
 	RawJSON       string `json:"raw_json"`
 	InLedgerIndex uint32 `json:"in_ledger_index"`
+	Version       uint64 `json:"version"`
 }
 
 type CHAccountRow struct {
 	AccountID string `json:"account_id"`
 	Address   string `json:"address"`
+	Version   uint64 `json:"version"`
 }
 
 type CHAssetRow struct {
@@ -343,6 +345,7 @@ type CHAssetRow struct {
 	Currency  string `json:"currency"`
 	IssuerID  string `json:"issuer_id"`
 	Symbol    string `json:"symbol"`
+	Version   uint64 `json:"version"`
 }
 
 type CHMoneyFlowRow struct {
@@ -358,4 +361,5 @@ type CHMoneyFlowRow struct {
 	ToAmount    string `json:"to_amount"`
 	Quote       string `json:"quote"`
 	Kind        string `json:"kind"`
+	Version     uint64 `json:"version"`
 }

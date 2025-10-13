@@ -1,6 +1,16 @@
 -- Ensure database exists
 CREATE DATABASE IF NOT EXISTS xrpl;
 
+-- Create table for XRP prices
+CREATE TABLE IF NOT EXISTS xrpl.xrp_prices
+(
+  timestamp DateTime64(3, 'UTC'),
+  price_usd Decimal(18, 6),
+  version UInt64 DEFAULT now64()
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY timestamp;
+
 -- =====================
 -- Transactions (unique)
 -- =====================
@@ -16,9 +26,10 @@ CREATE TABLE IF NOT EXISTS xrpl.transactions
   destination_id UUID,
   result LowCardinality(String),
   fee_drops UInt64,
-  raw_json String CODEC(ZSTD)
+  raw_json String CODEC(ZSTD),
+  version UInt64 DEFAULT now64()
 )
-ENGINE = ReplacingMergeTree
+ENGINE = ReplacingMergeTree(version)
 ORDER BY (tx_id);
 
 -- ==================
@@ -27,9 +38,10 @@ ORDER BY (tx_id);
 CREATE TABLE IF NOT EXISTS xrpl.accounts
 (
   account_id UUID,
-  address String
+  address String,
+  version UInt64 DEFAULT now64()
 )
-ENGINE = ReplacingMergeTree
+ENGINE = ReplacingMergeTree(version)
 ORDER BY (account_id);
 
 -- =================
@@ -41,13 +53,18 @@ CREATE TABLE IF NOT EXISTS xrpl.assets
   asset_type Enum8('XRP' = 0, 'IOU' = 1),
   currency String,
   issuer_id UUID,
-  symbol LowCardinality(String)
+  symbol LowCardinality(String),
+  version UInt64 DEFAULT now64()
 )
-ENGINE = ReplacingMergeTree
+ENGINE = ReplacingMergeTree(version)
 ORDER BY (asset_id);
 
 -- Seed XRP asset (id is deterministic)
--- Seed XRP asset (id is generated externally now if needed)
+INSERT INTO xrpl.assets (asset_id, asset_type, currency, issuer_id, symbol) VALUES
+('7ab3a23b-28ba-5fb4-aac1-b3546017b182', 'XRP', 'XRP', '00000000-0000-0000-0000-000000000000', 'XRP');
+
+INSERT INTO xrpl.accounts (account_id, address) VALUES
+('00000000-0000-0000-0000-000000000000', 'XRP');
 
 -- ============================================================
 -- Money flows (relations between accounts for a given tx/asset)
@@ -63,9 +80,10 @@ CREATE TABLE IF NOT EXISTS xrpl.money_flow
   from_amount Decimal(38, 18),
   to_amount Decimal(38, 18),
   quote Decimal(38, 18),
-  kind Enum8('transfer' = 0, 'dexOffer' = 1, 'swap' = 2)
+  kind Enum8('transfer' = 0, 'dexOffer' = 1, 'swap' = 2),
+  version UInt64 DEFAULT now64()
 )
-ENGINE = ReplacingMergeTree
+ENGINE = ReplacingMergeTree(version)
 ORDER BY (tx_id, from_id, to_id, from_asset_id, to_asset_id, kind, from_amount);
 
 -- ==============================
@@ -91,7 +109,8 @@ SELECT
   toUUID(JSONExtractString(value, 'destination_id')) AS destination_id,
   coalesce(JSONExtractString(value, 'result'), '') AS result,
   toUInt64(JSONExtract(value, 'fee_drops', 'Int64')) AS fee_drops,
-  JSONExtractString(value, 'raw_json') AS raw_json
+  JSONExtractString(value, 'raw_json') AS raw_json,
+  now64() AS version
 FROM xrpl.ch_tx_kafka;
 
 -- Assets MV: direct mapping from final JSON
@@ -101,7 +120,8 @@ SELECT
   CAST(JSONExtractString(value, 'asset_type'), 'Enum8(''XRP''=0,''IOU''=1)') AS asset_type,
   JSONExtractString(value, 'currency') AS currency,
   toUUID(JSONExtractString(value, 'issuer_id')) AS issuer_id,
-  coalesce(nullIf(JSONExtractString(value, 'symbol'), ''), JSONExtractString(value, 'currency')) AS symbol
+  coalesce(nullIf(JSONExtractString(value, 'symbol'), ''), JSONExtractString(value, 'currency')) AS symbol,
+  now64() AS version
 FROM xrpl.ch_assets_kafka;
 
 -- Money flow MV: direct mapping from final JSON
@@ -115,14 +135,14 @@ SELECT
   CAST(JSONExtractString(value, 'from_amount'), 'Decimal(38,18)') AS from_amount,
   CAST(JSONExtractString(value, 'to_amount'), 'Decimal(38,18)') AS to_amount,
   CAST(JSONExtractString(value, 'quote'), 'Decimal(38,18)') AS quote,
-  CAST(JSONExtractString(value, 'kind'), 'Enum8(''transfer''=0,''dexOffer''=1,''swap''=2)') AS kind
+  CAST(JSONExtractString(value, 'kind'), 'Enum8(''transfer''=0,''dexOffer''=1,''swap''=2)') AS kind,
+  now64() AS version
 FROM xrpl.ch_moneyflows_kafka;
 
 -- Accounts MV: direct mapping from final JSON
 CREATE MATERIALIZED VIEW IF NOT EXISTS xrpl.ch_mv_accounts TO xrpl.accounts AS
 SELECT
   toUUID(JSONExtractString(value, 'account_id')) AS account_id,
-  JSONExtractString(value, 'address') AS address
+  JSONExtractString(value, 'address') AS address,
+  now64() AS version
 FROM xrpl.ch_accounts_kafka;
-
-
