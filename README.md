@@ -127,6 +127,20 @@ docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --c
 docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-ch-assets
 docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-ch-moneyflows
 
+
+Windows
 go build -o .\bin\platform-server.exe . 
 go build -o .\bin\platform-cli.exe .\cmd\cli
+
+run
 .\bin\platform-server.exe
+.\bin\platform-cli.exe
+
+
+Linux
+go build -o ./bin/platform-server ./ 
+go build -o ./bin/platform-cli ./cmd/cli
+
+run
+./bin/platform-server
+./bin/platform-cli
