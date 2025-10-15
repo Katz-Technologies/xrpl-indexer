@@ -45,6 +45,40 @@ func EnvLogType() string {
 	return os.Getenv("LOG_TYPE")
 }
 
+// Get log file path
+func EnvLogFilePath() string {
+	return os.Getenv("LOG_FILE_PATH")
+}
+
+// Get log file enabled flag
+func EnvLogFileEnabled() bool {
+	return os.Getenv("LOG_FILE_ENABLED") == "true"
+}
+
+// Get log file max size in MB
+func EnvLogFileMaxSize() int {
+	if v, err := strconv.Atoi(os.Getenv("LOG_FILE_MAX_SIZE_MB")); err == nil && v > 0 {
+		return v
+	}
+	return 100 // default 100MB
+}
+
+// Get log file max backups
+func EnvLogFileMaxBackups() int {
+	if v, err := strconv.Atoi(os.Getenv("LOG_FILE_MAX_BACKUPS")); err == nil && v >= 0 {
+		return v
+	}
+	return 3 // default 3 backups
+}
+
+// Get log file max age in days
+func EnvLogFileMaxAge() int {
+	if v, err := strconv.Atoi(os.Getenv("LOG_FILE_MAX_AGE_DAYS")); err == nil && v > 0 {
+		return v
+	}
+	return 7 // default 7 days
+}
+
 /*
 * XRPL protocol (compatible) server settings
  */

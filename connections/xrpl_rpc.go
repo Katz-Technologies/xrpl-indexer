@@ -1,6 +1,8 @@
 package connections
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/xrpscan/platform/config"
@@ -22,24 +24,35 @@ func NewXrplRPCClient() {
 }
 
 func NewXrplRPCClientWithURL(URL string) {
-	// Retry loop with exponential backoff until a successful ping
+	// Infinite retry loop with exponential backoff until a successful ping
 	backoff := time.Second
 	maxBackoff := 30 * time.Second
+	attempt := 0
 
 	for {
+		attempt++
+		logger.Log.Info().Str("url", URL).Int("attempt", attempt).Msg("Attempting to connect XRPL RPC client")
+
 		XrplRPCClient = xrpl.NewClient(xrpl.ClientConfig{URL: URL})
 		err := XrplRPCClient.Ping([]byte(URL))
 		if err == nil {
-			logger.Log.Info().Str("url", URL).Msg("Connected XRPL RPC client")
+			logger.Log.Info().Str("url", URL).Int("attempt", attempt).Msg("Successfully connected XRPL RPC client")
 			return
 		}
 
-		logger.Log.Warn().Str("url", URL).Dur("retry_in", backoff).Err(err).Msg("XRPL RPC connect failed; retrying")
-		time.Sleep(backoff)
-		if backoff < maxBackoff {
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
+		// Check if it's an IP limit error
+		if isIPLimitError(err) {
+			logger.Log.Warn().Str("url", URL).Int("attempt", attempt).Err(err).Msg("IP limit reached during initial connection, waiting 5 minutes")
+			time.Sleep(5 * time.Minute)
+			backoff = time.Second // Reset backoff after long wait
+		} else {
+			logger.Log.Warn().Str("url", URL).Int("attempt", attempt).Dur("retry_in", backoff).Err(err).Msg("XRPL RPC connect failed; retrying infinitely")
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
 			}
 		}
 	}
@@ -51,4 +64,76 @@ func GetXRPLRequestClient() *xrpl.Client {
 		return XrplRPCClient
 	}
 	return XrplClient
+}
+
+// CheckXRPLRPCConnectionHealth checks if the RPC client connection is healthy
+func CheckXRPLRPCConnectionHealth() error {
+	if XrplRPCClient == nil {
+		return fmt.Errorf("XRPL RPC client is not initialized")
+	}
+
+	// Try a simple ping to check connection health
+	err := XrplRPCClient.Ping([]byte("health_check"))
+	if err != nil {
+		logger.Log.Warn().Err(err).Msg("XRPL RPC client health check failed")
+		return err
+	}
+
+	logger.Log.Debug().Msg("XRPL RPC client health check passed")
+	return nil
+}
+
+// ReconnectXRPLRPCClient reconnects the RPC client with infinite retries
+func ReconnectXRPLRPCClient(URL string) error {
+	logger.Log.Info().Str("url", URL).Msg("Starting infinite retry reconnection for XRPL RPC client")
+
+	// Close existing connection
+	if XrplRPCClient != nil {
+		CloseXrplRPCClient()
+	}
+
+	// Infinite retry loop with exponential backoff
+	backoff := time.Second
+	maxBackoff := 30 * time.Second
+	attempt := 0
+
+	for {
+		attempt++
+		logger.Log.Info().Str("url", URL).Int("attempt", attempt).Msg("Attempting to reconnect XRPL RPC client")
+
+		// Create new connection
+		XrplRPCClient = xrpl.NewClient(xrpl.ClientConfig{URL: URL})
+		err := XrplRPCClient.Ping([]byte("reconnect_test"))
+		if err == nil {
+			logger.Log.Info().Str("url", URL).Int("attempt", attempt).Msg("Successfully reconnected XRPL RPC client")
+			return nil
+		}
+
+		// Check if it's an IP limit error
+		if isIPLimitError(err) {
+			logger.Log.Warn().Str("url", URL).Int("attempt", attempt).Err(err).Msg("IP limit reached during reconnection, waiting 5 minutes")
+			time.Sleep(5 * time.Minute)
+			backoff = time.Second // Reset backoff after long wait
+		} else {
+			logger.Log.Warn().Str("url", URL).Int("attempt", attempt).Dur("retry_in", backoff).Err(err).Msg("XRPL RPC reconnect failed; retrying infinitely")
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+		}
+	}
+}
+
+// isIPLimitError checks if the error is specifically about IP limit reached
+func isIPLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "close 1008") ||
+		strings.Contains(errStr, "policy violation") ||
+		strings.Contains(errStr, "IP limit reached")
 }

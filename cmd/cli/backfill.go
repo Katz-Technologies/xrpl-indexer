@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/segmentio/kafka-go"
@@ -86,64 +87,135 @@ func (cmd *BackfillCommand) Run() error {
 
 	// Initialize connections to services
 	logger.New()
+
+	log.Printf("[BACKFILL] Starting backfill process from ledger %d to %d", cmd.fIndexFrom, cmd.fIndexTo)
+	log.Printf("[BACKFILL] Using XRPL server: %s", cmd.fXrplServer)
+	log.Printf("[BACKFILL] Minimum delay between requests: %dms", cmd.fMinDelay)
+
+	log.Printf("[BACKFILL] Initializing Kafka writer...")
 	connections.NewWriter()
+	log.Printf("[BACKFILL] Kafka writer initialized successfully")
+
+	log.Printf("[BACKFILL] Initializing XRPL client...")
 	connections.NewXrplClientWithURL(cmd.fXrplServer)
+	log.Printf("[BACKFILL] XRPL client initialized successfully")
+
+	log.Printf("[BACKFILL] Initializing XRPL RPC client...")
 	connections.NewXrplRPCClientWithURL(cmd.fXrplServer)
-	defer connections.CloseWriter()
-	defer connections.CloseXrplClient()
-	defer connections.CloseXrplRPCClient()
+	log.Printf("[BACKFILL] XRPL RPC client initialized successfully")
+
+	defer func() {
+		log.Printf("[BACKFILL] Closing connections...")
+		connections.CloseWriter()
+		connections.CloseXrplClient()
+		connections.CloseXrplRPCClient()
+		log.Printf("[BACKFILL] All connections closed")
+	}()
 
 	// Fetch ledger and queue transactions for indexing
+	totalLedgers := cmd.fIndexTo - cmd.fIndexFrom + 1
+	log.Printf("[BACKFILL] Processing %d ledgers total", totalLedgers)
+	log.Printf("[BACKFILL] Starting sequential backfill process - will retry each ledger until success")
+
+	// Sequential processing loop - no skipping allowed
 	for ledgerIndex := cmd.fIndexFrom; ledgerIndex <= cmd.fIndexTo; ledgerIndex++ {
-		startTime := time.Now().UnixNano() / int64(time.Millisecond)
+		progress := float64(ledgerIndex-cmd.fIndexFrom+1) / float64(totalLedgers) * 100
 
-		// Retry logic for each ledger with connection recovery
-		maxRetries := 3
-		retryDelay := time.Second
-
-		for attempt := 0; attempt < maxRetries; attempt++ {
-			err := cmd.backfillLedgerWithRetry(ledgerIndex)
-			if err == nil {
-				break // Success, move to next ledger
-			}
-
-			log.Printf("[%s] Error backfilling ledger %d (attempt %d/%d): %v",
-				cmd.fXrplServer, ledgerIndex, attempt+1, maxRetries, err)
-
-			if attempt < maxRetries-1 {
-				log.Printf("[%s] Retrying ledger %d in %v...",
-					cmd.fXrplServer, ledgerIndex, retryDelay)
-				time.Sleep(retryDelay)
-				retryDelay *= 2 // Exponential backoff
-
-				// Try to reconnect XRPL clients
-				log.Printf("[%s] Attempting to reconnect XRPL clients...", cmd.fXrplServer)
-				connections.CloseXrplClient()
-				connections.CloseXrplRPCClient()
-				connections.NewXrplClientWithURL(cmd.fXrplServer)
-				connections.NewXrplRPCClientWithURL(cmd.fXrplServer)
-			} else {
-				log.Printf("[%s] Failed to backfill ledger %d after %d attempts, skipping",
-					cmd.fXrplServer, ledgerIndex, maxRetries)
-			}
+		// Log progress every 100 ledgers or for first/last ledger
+		if ledgerIndex == cmd.fIndexFrom || ledgerIndex == cmd.fIndexTo || ledgerIndex%100 == 0 {
+			log.Printf("[BACKFILL] Progress: %.1f%% (%d/%d) - Processing ledger %d",
+				progress, ledgerIndex-cmd.fIndexFrom+1, totalLedgers, ledgerIndex)
 		}
 
-		reqDuration := time.Now().UnixNano()/int64(time.Millisecond) - startTime
-
-		// Honor fair usage policy and wait before sending next request
-		delayRequired := cmd.fMinDelay - reqDuration
-		if delayRequired > 0 {
-			time.Sleep(time.Duration(delayRequired) * time.Millisecond)
-		}
+		// Process ledger with infinite retry until success
+		cmd.processLedgerWithInfiniteRetry(ledgerIndex)
 	}
+
+	log.Printf("[BACKFILL] Backfill process completed successfully")
 	return nil
 }
 
 // Worker functions
 
+// processLedgerWithInfiniteRetry processes a single ledger with infinite retry until success
+func (cmd *BackfillCommand) processLedgerWithInfiniteRetry(ledgerIndex int) {
+	retryDelay := time.Second
+	maxRetryDelay := 30 * time.Second
+	attempt := 0
+
+	for {
+		attempt++
+		startTime := time.Now()
+
+		log.Printf("[BACKFILL] Starting attempt %d for ledger %d", attempt, ledgerIndex)
+
+		err := cmd.backfillLedgerWithRetry(ledgerIndex)
+		reqDuration := time.Since(startTime)
+
+		if err == nil {
+			// Success!
+			log.Printf("[BACKFILL] Successfully processed ledger %d in %v (attempt %d)",
+				ledgerIndex, reqDuration, attempt)
+
+			// Honor fair usage policy and wait before sending next request
+			delayRequired := cmd.fMinDelay - reqDuration.Milliseconds()
+			if delayRequired > 0 {
+				time.Sleep(time.Duration(delayRequired) * time.Millisecond)
+			}
+
+			return // Exit function on success
+		}
+
+		log.Printf("[BACKFILL] Error backfilling ledger %d (attempt %d, duration %v): %v",
+			ledgerIndex, attempt, reqDuration, err)
+
+		// Check if it's a timeout error (request took too long)
+		if reqDuration > 35*time.Second {
+			log.Printf("[BACKFILL] Request for ledger %d took too long (%v), likely hung",
+				ledgerIndex, reqDuration)
+		}
+
+		// Check if it's a WebSocket connection error
+		if isWebSocketConnectionError(err) {
+			log.Printf("[BACKFILL] WebSocket connection error detected for ledger %d, attempting reconnection", ledgerIndex)
+
+			// Check if it's specifically an IP limit error
+			if isIPLimitError(err) {
+				log.Printf("[BACKFILL] IP limit reached error detected for ledger %d", ledgerIndex)
+				log.Printf("[BACKFILL] Server is blocking connections from this IP address")
+				log.Printf("[BACKFILL] Waiting longer before retry to allow IP limit to reset...")
+
+				// Wait longer for IP limit to reset
+				time.Sleep(5 * time.Minute)
+			} else {
+				// Try to reconnect XRPL clients with infinite retry
+				log.Printf("[BACKFILL] Attempting to reconnect XRPL clients...")
+				connections.CloseXrplClient()
+				connections.CloseXrplRPCClient()
+				connections.NewXrplClientWithURL(cmd.fXrplServer)
+				connections.NewXrplRPCClientWithURL(cmd.fXrplServer)
+				log.Printf("[BACKFILL] XRPL clients reconnected")
+			}
+		}
+
+		log.Printf("[BACKFILL] Retrying ledger %d in %v...", ledgerIndex, retryDelay)
+		time.Sleep(retryDelay)
+
+		// Exponential backoff
+		if retryDelay < maxRetryDelay {
+			retryDelay *= 2
+			if retryDelay > maxRetryDelay {
+				retryDelay = maxRetryDelay
+			}
+		}
+	}
+}
+
 // backfillLedgerWithRetry attempts to backfill a ledger with error handling and retry logic
 func (cmd *BackfillCommand) backfillLedgerWithRetry(ledgerIndex int) error {
-	log.Printf("[%s] Backfilling ledger: %d", cmd.fXrplServer, ledgerIndex)
+	if cmd.fVerbose {
+		log.Printf("[BACKFILL] Processing ledger: %d", ledgerIndex)
+	}
 
 	ledger := models.LedgerStream{
 		Type:        models.LEDGER_STREAM_TYPE,
@@ -156,15 +228,35 @@ func (cmd *BackfillCommand) backfillLedgerWithRetry(ledgerIndex int) error {
 	}
 
 	// Try to produce ledger to Kafka
+	if cmd.fVerbose {
+		log.Printf("[BACKFILL] Producing ledger %d to Kafka...", ledgerIndex)
+	}
 	err = cmd.produceLedgerWithRetry(ledgerJSON)
 	if err != nil {
 		return fmt.Errorf("failed to produce ledger: %w", err)
 	}
+	if cmd.fVerbose {
+		log.Printf("[BACKFILL] Ledger %d produced to Kafka successfully", ledgerIndex)
+	}
 
 	// Try to backfill transactions
+	if cmd.fVerbose {
+		log.Printf("[BACKFILL] Fetching transactions for ledger %d...", ledgerIndex)
+	}
+
+	// Log start time for transaction fetching
+	startTime := time.Now()
 	err = cmd.backfillTransactionsWithRetry(ledgerJSON)
+	requestDuration := time.Since(startTime)
+
 	if err != nil {
+		log.Printf("[BACKFILL] Failed to fetch transactions for ledger %d after %v: %v",
+			ledgerIndex, requestDuration, err)
 		return fmt.Errorf("failed to backfill transactions: %w", err)
+	}
+	if cmd.fVerbose {
+		log.Printf("[BACKFILL] Transactions for ledger %d processed successfully in %v",
+			ledgerIndex, requestDuration)
 	}
 
 	return nil
@@ -181,12 +273,11 @@ func (cmd *BackfillCommand) produceLedgerWithRetry(ledgerJSON []byte) error {
 			return nil // Success
 		}
 
-		log.Printf("[%s] Error producing ledger (attempt %d/%d): %v",
-			cmd.fXrplServer, attempt+1, maxRetries, err)
+		log.Printf("[BACKFILL] Error producing ledger to Kafka (attempt %d/%d): %v",
+			attempt+1, maxRetries, err)
 
 		if attempt < maxRetries-1 {
-			log.Printf("[%s] Retrying ledger production in %v...",
-				cmd.fXrplServer, retryDelay)
+			log.Printf("[BACKFILL] Retrying ledger production in %v...", retryDelay)
 			time.Sleep(retryDelay)
 			retryDelay *= 2
 		}
@@ -229,19 +320,21 @@ func (cmd *BackfillCommand) backfillTransactionsWithRetry(ledgerJSON []byte) err
 			return nil // Success
 		}
 
-		log.Printf("[%s] Error backfilling transactions (attempt %d/%d): %v",
-			cmd.fXrplServer, attempt+1, maxRetries, err)
+		log.Printf("[BACKFILL] Error backfilling transactions (attempt %d/%d): %v",
+			attempt+1, maxRetries, err)
 
 		if attempt < maxRetries-1 {
-			log.Printf("[%s] Retrying transaction backfill in %v...",
-				cmd.fXrplServer, retryDelay)
+			log.Printf("[BACKFILL] Retrying transaction backfill in %v...", retryDelay)
 			time.Sleep(retryDelay)
 			retryDelay *= 2
 
-			// Try to reconnect XRPL RPC client
-			log.Printf("[%s] Attempting to reconnect XRPL RPC client...", cmd.fXrplServer)
-			connections.CloseXrplRPCClient()
-			connections.NewXrplRPCClientWithURL(cmd.fXrplServer)
+			// Try to reconnect XRPL RPC client with infinite retry
+			log.Printf("[BACKFILL] Attempting to reconnect XRPL RPC client...")
+			if err := connections.ReconnectXRPLRPCClient(cmd.fXrplServer); err != nil {
+				log.Printf("[BACKFILL] Failed to reconnect XRPL RPC client: %v", err)
+			} else {
+				log.Printf("[BACKFILL] XRPL RPC client reconnected successfully")
+			}
 		}
 	}
 
@@ -255,6 +348,9 @@ func (cmd *BackfillCommand) backfillTransactions(ledgerJSON []byte) error {
 	}
 
 	// Fetch all transactions included in this ledger from XRPL server
+	if cmd.fVerbose {
+		log.Printf("[BACKFILL] Fetching transactions from XRPL server for ledger %d...", ledger.LedgerIndex)
+	}
 	txResponse, err := ledger.FetchTransactions()
 	if err != nil {
 		return fmt.Errorf("failed to fetch transactions for ledger %d: %w", ledger.LedgerIndex, err)
@@ -321,10 +417,48 @@ func (cmd *BackfillCommand) backfillTransactions(ledgerJSON []byte) error {
 	}
 
 	if len(msgs) > 0 {
+		if cmd.fVerbose {
+			log.Printf("[BACKFILL] Writing %d transactions to Kafka for ledger %d...", len(msgs), ledger.LedgerIndex)
+		}
 		if err := connections.KafkaWriter.WriteMessages(context.Background(), msgs...); err != nil {
 			return fmt.Errorf("failed to produce transaction batch for ledger %d: %w", ledger.LedgerIndex, err)
+		}
+		if cmd.fVerbose {
+			log.Printf("[BACKFILL] Successfully wrote %d transactions to Kafka for ledger %d", len(msgs), ledger.LedgerIndex)
+		}
+	} else {
+		if cmd.fVerbose {
+			log.Printf("[BACKFILL] No transactions found for ledger %d", ledger.LedgerIndex)
 		}
 	}
 
 	return nil
+}
+
+// isWebSocketConnectionError checks if the error is related to WebSocket connection issues
+func isWebSocketConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "websocket") ||
+		strings.Contains(errStr, "close 1006") ||
+		strings.Contains(errStr, "close 1008") ||
+		strings.Contains(errStr, "policy violation") ||
+		strings.Contains(errStr, "IP limit reached") ||
+		strings.Contains(errStr, "unexpected EOF") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe") ||
+		strings.Contains(errStr, "connection refused")
+}
+
+// isIPLimitError checks if the error is specifically about IP limit reached
+func isIPLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "close 1008") ||
+		strings.Contains(errStr, "policy violation") ||
+		strings.Contains(errStr, "IP limit reached")
 }

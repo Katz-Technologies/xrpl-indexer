@@ -6,6 +6,7 @@ import (
 
 	"github.com/segmentio/kafka-go"
 	"github.com/xrpscan/platform/config"
+	"github.com/xrpscan/platform/logger"
 )
 
 var KafkaWriter *kafka.Writer
@@ -15,6 +16,8 @@ var wOnce sync.Once
 // specify the Topic where it must be written to.
 func NewWriter() {
 	wOnce.Do(func() {
+		logger.Log.Info().Str("bootstrap_server", config.EnvKafkaBootstrapServer()).Msg("Initializing Kafka writer")
+
 		// Configure batching and delivery semantics from env
 		batchTimeout := time.Duration(config.EnvKafkaWriterBatchTimeoutMs()) * time.Millisecond
 		requiredAcks := kafka.RequireOne
@@ -37,6 +40,13 @@ func NewWriter() {
 			RequiredAcks:           requiredAcks,
 			AllowAutoTopicCreation: true,
 		}
+
+		logger.Log.Info().
+			Str("bootstrap_server", config.EnvKafkaBootstrapServer()).
+			Int("batch_size", config.EnvKafkaWriterBatchSize()).
+			Int("batch_bytes", config.EnvKafkaWriterBatchBytes()).
+			Dur("batch_timeout", batchTimeout).
+			Msg("Kafka writer initialized successfully")
 	})
 }
 

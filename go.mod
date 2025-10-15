@@ -12,6 +12,7 @@ require (
 	github.com/segmentio/kafka-go v0.4.47
 	github.com/shopspring/decimal v1.4.0
 	github.com/xrpscan/xrpl-go v0.2.10
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
 
 require (
