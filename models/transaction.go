@@ -359,6 +359,8 @@ type CHMoneyFlowRow struct {
 	ToAssetID   string `json:"to_asset_id"`
 	FromAmount  string `json:"from_amount"`
 	ToAmount    string `json:"to_amount"`
+	InitFromAmount string `json:"init_from_amount"`
+	InitToAmount string `json:"init_to_amount"`
 	Quote       string `json:"quote"`
 	Kind        string `json:"kind"`
 	Version     uint64 `json:"version"`

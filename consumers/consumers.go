@@ -281,16 +281,18 @@ func RunConsumers() {
 					CHAccountsRows := make([]models.CHAccountRow, 0)
 
 					if account == destination {
-						amount_1_prev := decimal.NewFromFloat(0)
-						amount_1_final := decimal.NewFromFloat(0)
+						amount_1_prev := decimal.Zero
+						amount_1_final := decimal.Zero
 
-						amount_2_prev := decimal.NewFromFloat(0)
-						amount_2_final := decimal.NewFromFloat(0)
+						amount_2_prev := decimal.Zero
+						amount_2_final := decimal.Zero
 
-						delta_1 := decimal.NewFromFloat(0)
+						init_1 := decimal.Zero
+						delta_1 := decimal.Zero
 						delta_1_currency := ""
 						delta_1_issuer := ""
-						delta_2 := decimal.NewFromFloat(0)
+						init_2 := decimal.Zero
+						delta_2 := decimal.Zero
 						delta_2_currency := ""
 						delta_2_issuer := ""
 
@@ -427,17 +429,151 @@ func RunConsumers() {
 														to_asset_id = idAssetIOU(normCurrency(prevTakerPaysCurrency), prevTakerPaysIssuer)
 													}
 
+													init_from_amount := decimal.Zero
+													init_to_amount := decimal.Zero
+
+													for _, n2 := range nodes {
+														node2, _ := n2.(map[string]interface{})
+														if modifiedNode, ok := node2["ModifiedNode"].(map[string]interface{}); ok {
+															if ledgerEntryType, ok := modifiedNode["LedgerEntryType"].(string); ok {
+																if prevTakerGetsCurrency == "XRP" && ledgerEntryType == "AccountRoot" {
+																	if finalFields, ok := modifiedNode["FinalFields"].(map[string]interface{}); ok {
+																		if acc, ok := finalFields["Account"].(string); ok && acc == accountAddress {
+																			if previousFields, ok := modifiedNode["PreviousFields"].(map[string]interface{}); ok {
+																				if balanceStr, ok := previousFields["Balance"].(string); ok {
+																					if v, err := decimal.NewFromString(balanceStr); err == nil {
+																						init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																					}
+																				}
+																			}
+																		}
+																	}
+																} else if prevTakerGetsCurrency != "XRP" && ledgerEntryType == "RippleState" {
+																	if finalFields, ok := modifiedNode["FinalFields"].(map[string]interface{}); ok {
+																		matchesFromAsset := false
+																		if lowLimit, ok := finalFields["LowLimit"].(map[string]interface{}); ok {
+																			if lowIssuer, ok := lowLimit["issuer"].(string); ok {
+																				if lowCur, ok := lowLimit["currency"].(string); ok {
+																					if lowIssuer == accountAddress && normCurrency(lowCur) == normCurrency(prevTakerGetsCurrency) {
+																						if highLimit, ok := finalFields["HighLimit"].(map[string]interface{}); ok {
+																							if highIssuer, ok := highLimit["issuer"].(string); ok {
+																								if highIssuer == prevTakerGetsIssuer {
+																									matchesFromAsset = true
+																								}
+																							}
+																						}
+																					}
+																				}
+																			}
+																		}
+																		if !matchesFromAsset {
+																			if highLimit, ok := finalFields["HighLimit"].(map[string]interface{}); ok {
+																				if highIssuer, ok := highLimit["issuer"].(string); ok {
+																					if highCur, ok := highLimit["currency"].(string); ok {
+																						if highIssuer == accountAddress && normCurrency(highCur) == normCurrency(prevTakerGetsCurrency) {
+																							if lowLimit, ok := finalFields["LowLimit"].(map[string]interface{}); ok {
+																								if lowIssuer, ok := lowLimit["issuer"].(string); ok {
+																									if lowIssuer == prevTakerGetsIssuer {
+																										matchesFromAsset = true
+																									}
+																								}
+																							}
+																						}
+																					}
+																				}
+																			}
+																		}
+																		if matchesFromAsset {
+																			if previousFields, ok := modifiedNode["PreviousFields"].(map[string]interface{}); ok {
+																				if balance, ok := previousFields["Balance"].(map[string]interface{}); ok {
+																					if vs, ok := balance["value"].(string); ok {
+																						if v, err := decimal.NewFromString(vs); err == nil {
+																							init_from_amount = v.Abs()
+																						}
+																					}
+																				}
+																			}
+																		}
+																	}
+																}
+
+																if prevTakerPaysCurrency == "XRP" && ledgerEntryType == "AccountRoot" {
+																	if finalFields, ok := modifiedNode["FinalFields"].(map[string]interface{}); ok {
+																		if acc, ok := finalFields["Account"].(string); ok && acc == accountAddress {
+																			if previousFields, ok := modifiedNode["PreviousFields"].(map[string]interface{}); ok {
+																				if balanceStr, ok := previousFields["Balance"].(string); ok {
+																					if v, err := decimal.NewFromString(balanceStr); err == nil {
+																						init_to_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																					}
+																				}
+																			}
+																		}
+																	}
+																} else if prevTakerPaysCurrency != "XRP" && ledgerEntryType == "RippleState" {
+																	if finalFields, ok := modifiedNode["FinalFields"].(map[string]interface{}); ok {
+																		matchesToAsset := false
+																		if lowLimit, ok := finalFields["LowLimit"].(map[string]interface{}); ok {
+																			if lowIssuer, ok := lowLimit["issuer"].(string); ok {
+																				if lowCur, ok := lowLimit["currency"].(string); ok {
+																					if lowIssuer == accountAddress && normCurrency(lowCur) == normCurrency(prevTakerPaysCurrency) {
+																						if highLimit, ok := finalFields["HighLimit"].(map[string]interface{}); ok {
+																							if highIssuer, ok := highLimit["issuer"].(string); ok {
+																								if highIssuer == prevTakerPaysIssuer {
+																									matchesToAsset = true
+																								}
+																							}
+																						}
+																					}
+																				}
+																			}
+																		}
+																		if !matchesToAsset {
+																			if highLimit, ok := finalFields["HighLimit"].(map[string]interface{}); ok {
+																				if highIssuer, ok := highLimit["issuer"].(string); ok {
+																					if highCur, ok := highLimit["currency"].(string); ok {
+																						if highIssuer == accountAddress && normCurrency(highCur) == normCurrency(prevTakerPaysCurrency) {
+																							if lowLimit, ok := finalFields["LowLimit"].(map[string]interface{}); ok {
+																								if lowIssuer, ok := lowLimit["issuer"].(string); ok {
+																									if lowIssuer == prevTakerPaysIssuer {
+																										matchesToAsset = true
+																									}
+																								}
+																							}
+																						}
+																					}
+																				}
+																			}
+																		}
+																		if matchesToAsset {
+																			if previousFields, ok := modifiedNode["PreviousFields"].(map[string]interface{}); ok {
+																				if balance, ok := previousFields["Balance"].(map[string]interface{}); ok {
+																					if vs, ok := balance["value"].(string); ok {
+																						if v, err := decimal.NewFromString(vs); err == nil {
+																							init_to_amount = v.Abs()
+																						}
+																					}
+																				}
+																			}
+																		}
+																	}
+																}
+															}
+														}
+													}
+
 													CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-														TxID:        txId,
-														FromID:      from_id,
-														ToID:        to_id,
-														FromAssetID: from_asset_id,
-														ToAssetID:   to_asset_id,
-														FromAmount:  takerGetsDelta.Neg().String(),
-														ToAmount:    takerPaysDelta.String(),
-														Quote:       rate.String(),
-														Kind:        "dexOffer",
-														Version:     generateVersion(),
+														TxID:           txId,
+														FromID:         from_id,
+														ToID:           to_id,
+														FromAssetID:    from_asset_id,
+														ToAssetID:      to_asset_id,
+														FromAmount:     takerGetsDelta.Neg().String(),
+														ToAmount:       takerPaysDelta.String(),
+														InitFromAmount: init_from_amount.String(),
+														InitToAmount:   init_to_amount.String(),
+														Quote:          rate.String(),
+														Kind:           "dexOffer",
+														Version:        generateVersion(),
 													})
 
 													CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: accountAddress, Version: generateVersion()})
@@ -453,8 +589,8 @@ func RunConsumers() {
 								if final_fields, ok := modified["FinalFields"].(map[string]interface{}); ok {
 									if node_account, ok := final_fields["Account"].(string); ok {
 										if account == node_account {
-											amount_account_final := decimal.NewFromFloat(0)
-											amount_account_prev := decimal.NewFromFloat(0)
+											amount_account_final := decimal.Zero
+											amount_account_prev := decimal.Zero
 											currency_account := ""
 											issuer_account := ""
 											if balance, ok := final_fields["Balance"].(map[string]interface{}); ok {
@@ -521,11 +657,13 @@ func RunConsumers() {
 											if !diff.Add(feeXRP).IsZero() {
 												if !delta_1_filled {
 													delta_1 = diff.Add(feeXRP)
+													init_1 = amount_account_prev
 													delta_1_currency = currency_account
 													delta_1_issuer = issuer_account
 													delta_1_filled = true
 												} else {
 													delta_2 = diff.Add(feeXRP)
+													init_2 = amount_account_prev
 													delta_2_currency = currency_account
 													delta_2_issuer = issuer_account
 												}
@@ -598,6 +736,7 @@ func RunConsumers() {
 													amount_1_prev = amount_1_prev.Neg()
 												}
 												delta_1 = amount_1_final.Sub(amount_1_prev)
+												init_1 = amount_1_prev
 												delta_1_currency = currency_low_limit
 												delta_1_issuer = issuer_low_limit
 												delta_1_filled = true
@@ -610,6 +749,7 @@ func RunConsumers() {
 													amount_2_prev = amount_2_prev.Neg()
 												}
 												delta_2 = amount_2_final.Sub(amount_2_prev)
+												init_2 = amount_2_prev
 												delta_2_currency = currency_low_limit
 												delta_2_issuer = issuer_low_limit
 											}
@@ -640,7 +780,6 @@ func RunConsumers() {
 													} else {
 														amount_2_final, _ = decimal.NewFromString(vs)
 													}
-
 												}
 											} else if balanceStr, ok := final_fields["Balance"].(string); ok {
 												if v, err := decimal.NewFromString(balanceStr); err == nil {
@@ -649,7 +788,6 @@ func RunConsumers() {
 													} else {
 														amount_2_final = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 													}
-
 												}
 											}
 
@@ -684,6 +822,7 @@ func RunConsumers() {
 													amount_1_prev = amount_1_prev.Neg()
 												}
 												delta_1 = amount_1_final.Sub(amount_1_prev)
+												init_1 = amount_1_prev
 												delta_1_currency = currency_high_limit
 												delta_1_issuer = issuer_high_limit
 												delta_1_filled = true
@@ -696,6 +835,7 @@ func RunConsumers() {
 													amount_2_prev = amount_2_prev.Neg()
 												}
 												delta_2 = amount_2_final.Sub(amount_2_prev)
+												init_2 = amount_2_prev
 												delta_2_currency = currency_high_limit
 												delta_2_issuer = issuer_high_limit
 											}
@@ -706,25 +846,31 @@ func RunConsumers() {
 							}
 						}
 
-						from_amount := decimal.NewFromFloat(0)
+						from_amount := decimal.Zero
+						init_from_amount := decimal.Zero
 						from_currency := ""
 						from_issuer := ""
-						to_amount := decimal.NewFromFloat(0)
+						to_amount := decimal.Zero
+						init_to_amount := decimal.Zero
 						to_currency := ""
 						to_issuer := ""
 
-						if delta_1.LessThan(decimal.NewFromFloat(0)) {
+						if delta_1.LessThan(decimal.Zero) {
 							from_amount = delta_1
+							init_from_amount = init_1
 							from_currency = delta_1_currency
 							from_issuer = delta_1_issuer
 							to_amount = delta_2
+							init_to_amount = init_2
 							to_currency = delta_2_currency
 							to_issuer = delta_2_issuer
 						} else {
 							from_amount = delta_2
+							init_from_amount = init_2
 							from_currency = delta_2_currency
 							from_issuer = delta_2_issuer
 							to_amount = delta_1
+							init_to_amount = init_1
 							to_currency = delta_1_currency
 							to_issuer = delta_1_issuer
 						}
@@ -754,16 +900,18 @@ func RunConsumers() {
 						}
 
 						CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-							TxID:        txId,
-							FromID:      from_id,
-							ToID:        to_id,
-							FromAssetID: from_asset_id,
-							ToAssetID:   to_asset_id,
-							FromAmount:  from_amount.String(),
-							ToAmount:    to_amount.String(),
-							Quote:       rate.String(),
-							Kind:        "swap",
-							Version:     generateVersion(),
+							TxID:           txId,
+							FromID:         from_id,
+							ToID:           to_id,
+							FromAssetID:    from_asset_id,
+							ToAssetID:      to_asset_id,
+							FromAmount:     from_amount.String(),
+							ToAmount:       to_amount.String(),
+							InitFromAmount: init_from_amount.String(),
+							InitToAmount:   init_to_amount.String(),
+							Quote:          rate.String(),
+							Kind:           "swap",
+							Version:        generateVersion(),
 						})
 						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account, Version: generateVersion()})
 					} else {
@@ -773,7 +921,7 @@ func RunConsumers() {
 						from_asset_id := ""
 						to_asset_id := ""
 
-						amount := decimal.NewFromFloat(0)
+						amount := decimal.Zero
 						amount_issuer := ""
 						amount_currency := ""
 
@@ -799,6 +947,56 @@ func RunConsumers() {
 							}
 						}
 
+						init_amount := decimal.Zero
+
+						for _, n := range nodes {
+							node, _ := n.(map[string]interface{})
+
+							if modifiedNodes, ok := node["ModifiedNode"].(map[string]interface{}); ok {
+								if ledgerEntryType, ok := modifiedNodes["LedgerEntryType"].(string); ok {
+									if amount_currency == "XRP" {
+										if ledgerEntryType == "AccountRoot" {
+											if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+												if finalFieldAccount, ok := finalField["Account"].(string); ok {
+													if finalFieldAccount == account {
+														if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+															if balanceStr, ok := previousField["Balance"].(string); ok {
+																if v, err := decimal.NewFromString(balanceStr); err == nil {
+																	init_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																}
+															}
+														}
+													}
+												}
+											}
+										}
+									} else {
+										if ledgerEntryType == "RippleState" {
+											if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+												if lowLimit, ok := finalField["LowLimit"].(map[string]interface{}); ok {
+													if lowLimitAccount, ok := lowLimit["issuer"].(string); ok {
+														if highLimit, ok := finalField["HighLimit"].(map[string]interface{}); ok {
+															if highLimitAccount, ok := highLimit["issuer"].(string); ok {
+																if lowLimitAccount == account || highLimitAccount == account {
+																	if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+																		if balance, ok := previousField["Balance"].(map[string]interface{}); ok {
+																			if vs, ok := balance["value"].(string); ok {
+																				init_amount, _ = decimal.NewFromString(vs)
+																			}
+																		}
+																	}
+																}
+															}
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+
 						if amount_currency == "XRP" {
 							from_asset_id = idAssetXRP()
 						} else {
@@ -812,16 +1010,18 @@ func RunConsumers() {
 						}
 
 						CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-							TxID:        txId,
-							FromID:      from_id,
-							ToID:        to_id,
-							FromAssetID: from_asset_id,
-							ToAssetID:   to_asset_id,
-							FromAmount:  amount.Neg().String(),
-							ToAmount:    amount.String(),
-							Quote:       "1",
-							Kind:        "transfer",
-							Version:     generateVersion(),
+							TxID:           txId,
+							FromID:         from_id,
+							ToID:           to_id,
+							FromAssetID:    from_asset_id,
+							ToAssetID:      to_asset_id,
+							FromAmount:     amount.Neg().String(),
+							ToAmount:       amount.String(),
+							InitFromAmount: init_amount.Abs().String(),
+							InitToAmount:   init_amount.Abs().String(),
+							Quote:          "1",
+							Kind:           "transfer",
+							Version:        generateVersion(),
 						})
 						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account, Version: generateVersion()})
 						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: to_id, Address: destination, Version: generateVersion()})
