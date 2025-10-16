@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS xrpl.money_flow
   to_asset_id UUID,
   from_amount Decimal(38, 18),
   to_amount Decimal(38, 18),
+  init_from_amount Decimal(38, 18),
+  init_to_amount Decimal(38, 18),
   quote Decimal(38, 18),
   kind Enum8('transfer' = 0, 'dexOffer' = 1, 'swap' = 2),
   version UInt64 DEFAULT now64()
@@ -134,6 +136,8 @@ SELECT
   toUUID(JSONExtractString(value, 'to_asset_id')) AS to_asset_id,
   CAST(JSONExtractString(value, 'from_amount'), 'Decimal(38,18)') AS from_amount,
   CAST(JSONExtractString(value, 'to_amount'), 'Decimal(38,18)') AS to_amount,
+  CAST(JSONExtractString(value, 'init_from_amount'), 'Decimal(38,18)') AS init_from_amount,
+  CAST(JSONExtractString(value, 'init_to_amount'), 'Decimal(38,18)') AS init_to_amount,
   CAST(JSONExtractString(value, 'quote'), 'Decimal(38,18)') AS quote,
   CAST(JSONExtractString(value, 'kind'), 'Enum8(''transfer''=0,''dexOffer''=1,''swap''=2)') AS kind,
   now64() AS version
