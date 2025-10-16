@@ -146,4 +146,4 @@ run
 ./bin/platform-cli
 
 background backfill
-nohup ./run.sh > backfill.log 2>&1 &
+nohup ./run.sh > logs/backfill.log 2>&1 &
