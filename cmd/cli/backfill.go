@@ -17,6 +17,7 @@ import (
 	"github.com/segmentio/kafka-go"
 	"github.com/xrpscan/platform/config"
 	"github.com/xrpscan/platform/connections"
+	"github.com/xrpscan/platform/consumers"
 	"github.com/xrpscan/platform/logger"
 	"github.com/xrpscan/platform/models"
 	"github.com/xrpscan/platform/signals"
@@ -96,6 +97,10 @@ func (cmd *BackfillCommand) Run() error {
 	connections.NewWriter()
 	log.Printf("[BACKFILL] Kafka writer initialized successfully")
 
+	log.Printf("[BACKFILL] Initializing Kafka readers...")
+	connections.NewReaders()
+	log.Printf("[BACKFILL] Kafka readers initialized successfully")
+
 	log.Printf("[BACKFILL] Initializing XRPL client...")
 	connections.NewXrplClientWithURL(cmd.fXrplServer)
 	log.Printf("[BACKFILL] XRPL client initialized successfully")
@@ -104,9 +109,19 @@ func (cmd *BackfillCommand) Run() error {
 	connections.NewXrplRPCClientWithURL(cmd.fXrplServer)
 	log.Printf("[BACKFILL] XRPL RPC client initialized successfully")
 
+	log.Printf("[BACKFILL] Starting consumers to process data for ClickHouse...")
+	go consumers.RunConsumers()
+	log.Printf("[BACKFILL] Consumers started successfully")
+
+	// Give consumers time to initialize
+	log.Printf("[BACKFILL] Waiting for consumers to initialize...")
+	time.Sleep(2 * time.Second)
+	log.Printf("[BACKFILL] Consumers initialization complete")
+
 	defer func() {
 		log.Printf("[BACKFILL] Closing connections...")
 		connections.CloseWriter()
+		connections.CloseReaders()
 		connections.CloseXrplClient()
 		connections.CloseXrplRPCClient()
 		log.Printf("[BACKFILL] All connections closed")
