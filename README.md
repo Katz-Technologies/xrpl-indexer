@@ -144,3 +144,6 @@ go build -o ./bin/platform-cli ./cmd/cli
 run
 ./bin/platform-server
 ./bin/platform-cli
+
+background backfill
+nohup ./run.sh > backfill.log 2>&1 &
