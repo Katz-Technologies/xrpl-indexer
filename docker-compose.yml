@@ -94,6 +94,17 @@ services:
       KAFKA_CLUSTERS_0_ZOOKEEPER: "zookeeper:2181"
       KAFKA_UI_AUTH_TYPE: "disabled"
 
+  kafka-init:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION}
+    depends_on:
+      kafka-broker1:
+        condition: service_started
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: /bin/bash
+    command: /scripts/kafka-init.sh
+    restart: "no"
+
 volumes:
   zookeeper-data:
     driver: local
