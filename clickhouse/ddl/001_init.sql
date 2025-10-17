@@ -2,7 +2,7 @@
 -- XRPL ClickHouse Schema v2 (deduplicated)
 -- Optimized for ClickHouse 24.8+
 -- - Automatic deduplication via MV and settings
--- - Monthly partitions, ZSTD/Gorilla codecs
+-- - Monthly partitions, ZSTD codec
 -- ======================================================
 
 CREATE DATABASE IF NOT EXISTS xrpl;
@@ -13,7 +13,7 @@ CREATE DATABASE IF NOT EXISTS xrpl;
 CREATE TABLE IF NOT EXISTS xrpl.xrp_prices
 (
   timestamp DateTime64(3, 'UTC'),
-  price_usd Decimal(18, 6) CODEC(Gorilla, ZSTD(3)),
+  price_usd Decimal(18, 6) CODEC(ZSTD(3)),
   version UInt64 DEFAULT now64()
 )
 ENGINE = ReplacingMergeTree(version)
@@ -21,9 +21,7 @@ PARTITION BY toYYYYMM(timestamp)
 ORDER BY timestamp
 SETTINGS
   index_granularity = 8192,
-  index_granularity_bytes = 10485760,
-  deduplicate_blocks_in_dependent_materialized_views = 1,
-  non_replicated_deduplication_window = 10000;
+  index_granularity_bytes = 10485760;
 
 -- ============================
 -- Transactions
@@ -48,9 +46,7 @@ PARTITION BY toYYYYMM(close_time)
 ORDER BY (tx_id)
 SETTINGS
   index_granularity = 8192,
-  index_granularity_bytes = 10485760,
-  deduplicate_blocks_in_dependent_materialized_views = 1,
-  non_replicated_deduplication_window = 10000;
+  index_granularity_bytes = 10485760;
 
 -- Secondary indexes
 ALTER TABLE xrpl.transactions ADD INDEX idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
@@ -69,9 +65,7 @@ CREATE TABLE IF NOT EXISTS xrpl.accounts
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (account_id)
 SETTINGS
-  index_granularity = 8192,
-  deduplicate_blocks_in_dependent_materialized_views = 1,
-  non_replicated_deduplication_window = 10000;
+  index_granularity = 8192;
 
 ALTER TABLE xrpl.accounts ADD INDEX idx_address (address) TYPE tokenbf_v1(512, 3, 0) GRANULARITY 64;
 
@@ -90,9 +84,7 @@ CREATE TABLE IF NOT EXISTS xrpl.assets
 ENGINE = ReplacingMergeTree(version)
 ORDER BY (asset_id)
 SETTINGS
-  index_granularity = 8192,
-  deduplicate_blocks_in_dependent_materialized_views = 1,
-  non_replicated_deduplication_window = 10000;
+  index_granularity = 8192;
 
 -- Seed XRP
 INSERT INTO xrpl.assets (asset_id, asset_type, currency, issuer_id, symbol)
@@ -111,22 +103,20 @@ CREATE TABLE IF NOT EXISTS xrpl.money_flow
   to_id UUID,
   from_asset_id UUID,
   to_asset_id UUID,
-  from_amount Decimal(38, 18) CODEC(Gorilla, ZSTD(3)),
-  to_amount Decimal(38, 18) CODEC(Gorilla, ZSTD(3)),
-  init_from_amount Decimal(38, 18) CODEC(Gorilla, ZSTD(3)),
-  init_to_amount Decimal(38, 18) CODEC(Gorilla, ZSTD(3)),
-  quote Decimal(38, 18) CODEC(Gorilla, ZSTD(3)),
+  from_amount Decimal(38, 18) CODEC(ZSTD(3)),
+  to_amount Decimal(38, 18) CODEC(ZSTD(3)),
+  init_from_amount Decimal(38, 18) CODEC(ZSTD(3)),
+  init_to_amount Decimal(38, 18) CODEC(ZSTD(3)),
+  quote Decimal(38, 18) CODEC(ZSTD(3)),
   kind Enum8('transfer' = 0, 'dexOffer' = 1, 'swap' = 2),
   version UInt64 DEFAULT now64()
 )
 ENGINE = ReplacingMergeTree(version)
-PARTITION BY toYYYYMM(now())
+PARTITION BY toYYYYMM(toDateTime64(version / 1000, 3, 'UTC'))
 ORDER BY (tx_id, from_id, to_id, from_asset_id, to_asset_id, kind, from_amount)
 SETTINGS
   index_granularity = 8192,
-  index_granularity_bytes = 10485760,
-  deduplicate_blocks_in_dependent_materialized_views = 1,
-  non_replicated_deduplication_window = 10000;
+  index_granularity_bytes = 10485760;
 
 ALTER TABLE xrpl.money_flow ADD INDEX idx_from_to (from_id, to_id) TYPE set(0) GRANULARITY 64;
 ALTER TABLE xrpl.money_flow ADD INDEX idx_kind (kind) TYPE set(0) GRANULARITY 64;

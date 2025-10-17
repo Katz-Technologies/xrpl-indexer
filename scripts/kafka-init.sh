@@ -6,6 +6,7 @@ sleep 5
 
 echo "[Kafka Init] Creating topics..."
 TOPICS=(
+  xrpl-platform-transactions
   xrpl-platform-ch-transactions
   xrpl-platform-ch-assets
   xrpl-platform-ch-moneyflows
