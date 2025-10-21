@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 	"github.com/shopspring/decimal"
 	"github.com/xrpscan/platform/config"
@@ -18,15 +17,7 @@ import (
 	"github.com/xrpscan/platform/models"
 )
 
-func idTx(hash string) string { return uuid.NewSHA1(uuid.NameSpaceURL, []byte("tx:"+hash)).String() }
-func idAccount(addr string) string {
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("acct:"+addr)).String()
-}
-func idAssetXRP() string { return "7ab3a23b-28ba-5fb4-aac1-b3546017b182" }
-func idAssetIOU(currency, issuer string) string {
-	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("asset:IOU:"+currency+":"+issuer)).String()
-}
-
+// decodeHexCurrency конвертирует HEX валюту в читаемый символ
 func decodeHexCurrency(cur string) (string, bool) {
 	if len(cur) != 40 {
 		return "", false
@@ -56,18 +47,41 @@ func decodeHexCurrency(cur string) (string, bool) {
 	return s, true
 }
 
-func symbolFromCurrencyMap(m map[string]interface{}) string {
-	if v, ok := m["_currency"].(string); ok && v != "" {
-		return v
+// isHexCurrency проверяет, является ли строка HEX валютой
+func isHexCurrency(cur string) bool {
+	// HEX валюта обычно 40 символов (20 байт в hex)
+	if len(cur) != 40 {
+		return false
 	}
-	cur, _ := m["currency"].(string)
-	if s, ok := decodeHexCurrency(cur); ok {
-		return s
+	// Проверяем, что все символы - это hex цифры
+	for _, c := range cur {
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
 	}
-	return cur
+	return true
 }
 
 func normCurrency(c string) string { return strings.ToUpper(c) }
+
+// currencyToSymbol конвертирует HEX валюту в символ, иначе возвращает как есть
+func currencyToSymbol(cur string) string {
+	if isHexCurrency(cur) {
+		if symbol, ok := decodeHexCurrency(cur); ok {
+			return symbol
+		}
+		return "" // Если не удалось декодировать
+	}
+	return strings.ToUpper(cur) // Обычная валюта как есть
+}
+
+// fixIssuerForXRP заменяет пустую строку issuer на "XRP" для XRP валюты
+func fixIssuerForXRP(currency, issuer string) string {
+	if currency == "XRP" && issuer == "" {
+		return "XRP"
+	}
+	return issuer
+}
 
 // generateVersion creates a timestamp-based version for ReplacingMergeTree deduplication
 func generateVersion() uint64 {
@@ -130,11 +144,6 @@ func RunConsumers() {
 				logger.Log.Error().Err(err).Msg("Error fixing transaction object")
 				continue
 			}
-			b, err := json.Marshal(modified)
-			if err != nil {
-				logger.Log.Error().Err(err).Msg("Transaction json.Marshal error")
-				continue
-			}
 
 			var base map[string]interface{} = modified
 			hash, _ := base["hash"].(string)
@@ -142,12 +151,12 @@ func RunConsumers() {
 			closeTime, _ := base["date"].(float64)
 			account, _ := base["Account"].(string)
 			destination, _ := base["Destination"].(string)
-			result := ""
+			// Убрано result - больше не используется в новой схеме
 			inLedgerIndex := float64(0)
 			if meta, ok := base["meta"].(map[string]interface{}); ok {
 				if r, ok := meta["TransactionResult"].(string); ok {
 					if r == "tesSUCCESS" {
-						result = r
+						// Убрано присваивание result - больше не используется
 					} else {
 						continue
 					}
@@ -174,43 +183,10 @@ func RunConsumers() {
 				}
 			}
 
-			txId := idTx(hash)
-			accountId := idAccount(account)
-			destId := idAccount(destination)
+			// Убрано создание txId, accountId, destId - больше не нужны для новой схемы
 			const rippleToUnix int64 = 946684800
 			closeTimeUnix := int64(closeTime) + rippleToUnix
-			txRow := models.CHTransactionRow{
-				TxID:          txId,
-				Hash:          hash,
-				LedgerIndex:   uint32(ledgerIndex),
-				CloseTimeUnix: closeTimeUnix,
-				TxType:        "Payment",
-				AccountID:     accountId,
-				DestinationID: destId,
-				Result:        result,
-				FeeDrops:      feeDrops,
-				RawJSON:       string(b),
-				InLedgerIndex: uint32(inLedgerIndex),
-				Version:       generateVersion(),
-			}
-			if row, err := json.Marshal(txRow); err == nil {
-				_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHTransactions(), Key: []byte(hash), Value: row})
-			}
-
-			if account != "" {
-				aid := idAccount(account)
-				ar := models.CHAccountRow{AccountID: aid, Address: account, Version: generateVersion()}
-				if row, err := json.Marshal(ar); err == nil {
-					_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(account), Value: row})
-				}
-			}
-			if destination != "" {
-				did := idAccount(destination)
-				dr := models.CHAccountRow{AccountID: did, Address: destination, Version: generateVersion()}
-				if row, err := json.Marshal(dr); err == nil {
-					_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(destination), Value: row})
-				}
-			}
+			// Убрано создание CHTransactionRow - данные теперь идут в money_flow
 
 			issuersByCurrency := make(map[string]string)
 			if amt, ok := base["Amount"].(map[string]interface{}); ok {
@@ -219,17 +195,7 @@ func RunConsumers() {
 				iss, _ := amt["issuer"].(string)
 				if cur != "" && iss != "" {
 					issuersByCurrency[cur] = iss
-					assetKey := "IOU:" + cur + ":" + iss
-					sym := symbolFromCurrencyMap(amt)
-					issuerUUID := idAccount(iss)
-					assetRow := models.CHAssetRow{AssetID: idAssetIOU(cur, iss), AssetType: "IOU", Currency: cur, IssuerID: issuerUUID, Symbol: sym, Version: generateVersion()}
-					if row, err := json.Marshal(assetRow); err == nil {
-						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte(assetKey), Value: row})
-					}
-					ar := models.CHAccountRow{AccountID: issuerUUID, Address: iss, Version: generateVersion()}
-					if row2, err2 := json.Marshal(ar); err2 == nil {
-						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(iss), Value: row2})
-					}
+					// Убрано создание CHAssetRow - таблицы assets больше нет
 				}
 			}
 			if sm, ok := base["SendMax"].(map[string]interface{}); ok {
@@ -240,17 +206,7 @@ func RunConsumers() {
 					if _, ok := issuersByCurrency[cur]; !ok {
 						issuersByCurrency[cur] = iss
 					}
-					assetKey := "IOU:" + cur + ":" + iss
-					sym := symbolFromCurrencyMap(sm)
-					issuerUUID := idAccount(iss)
-					assetRow := models.CHAssetRow{AssetID: idAssetIOU(cur, iss), AssetType: "IOU", Currency: cur, IssuerID: issuerUUID, Symbol: sym, Version: generateVersion()}
-					if row, err := json.Marshal(assetRow); err == nil {
-						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte(assetKey), Value: row})
-					}
-					ar := models.CHAccountRow{AccountID: issuerUUID, Address: iss, Version: generateVersion()}
-					if row2, err2 := json.Marshal(ar); err2 == nil {
-						_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(iss), Value: row2})
-					}
+					// Убрано создание CHAssetRow - таблицы assets больше нет
 				}
 			}
 			if meta, ok := base["meta"].(map[string]interface{}); ok {
@@ -260,17 +216,7 @@ func RunConsumers() {
 					iss, _ := da["issuer"].(string)
 					if cur != "" && iss != "" {
 						issuersByCurrency[cur] = iss
-						assetKey := "IOU:" + cur + ":" + iss
-						sym := symbolFromCurrencyMap(da)
-						issuerUUID := idAccount(iss)
-						assetRow := models.CHAssetRow{AssetID: idAssetIOU(cur, iss), AssetType: "IOU", Currency: cur, IssuerID: issuerUUID, Symbol: sym, Version: generateVersion()}
-						if row, err := json.Marshal(assetRow); err == nil {
-							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAssets(), Key: []byte(assetKey), Value: row})
-						}
-						ar := models.CHAccountRow{AccountID: issuerUUID, Address: iss, Version: generateVersion()}
-						if row2, err2 := json.Marshal(ar); err2 == nil {
-							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(iss), Value: row2})
-						}
+						// Убрано создание CHAssetRow - таблицы assets больше нет
 					}
 				}
 			}
@@ -278,7 +224,46 @@ func RunConsumers() {
 			if meta, ok := base["meta"].(map[string]interface{}); ok {
 				if nodes, ok := meta["AffectedNodes"].([]interface{}); ok {
 					CHMoneyFlowRows := make([]models.CHMoneyFlowRow, 0)
-					CHAccountsRows := make([]models.CHAccountRow, 0)
+					// Убрано CHAccountsRows - таблицы accounts больше нет
+
+					// Определяем валюты из SendMax и delivered_amount для использования в основной логике
+					expected_from_currency := ""
+					expected_from_issuer := ""
+					expected_to_currency := ""
+					expected_to_issuer := ""
+
+					// Определяем from_currency и from_issuer из SendMax
+					if sm, ok := base["SendMax"].(map[string]interface{}); ok {
+						if cur, ok := sm["currency"].(string); ok {
+							expected_from_currency = currencyToSymbol(cur)
+						}
+						if iss, ok := sm["issuer"].(string); ok {
+							expected_from_issuer = fixIssuerForXRP(expected_from_currency, iss)
+						}
+					}
+
+					// Определяем to_currency и to_issuer из delivered_amount или Amount
+					if da, ok := meta["delivered_amount"].(map[string]interface{}); ok {
+						if cur, ok := da["currency"].(string); ok {
+							expected_to_currency = currencyToSymbol(cur)
+						}
+						if iss, ok := da["issuer"].(string); ok {
+							expected_to_issuer = fixIssuerForXRP(expected_to_currency, iss)
+						}
+					} else if amountField, ok := base["Amount"].(map[string]interface{}); ok {
+						if cur, ok := amountField["currency"].(string); ok {
+							expected_to_currency = currencyToSymbol(cur)
+						}
+						if iss, ok := amountField["issuer"].(string); ok {
+							expected_to_issuer = fixIssuerForXRP(expected_to_currency, iss)
+						}
+					} else if amountStr, ok := base["Amount"].(string); ok {
+						// Amount - это строка (XRP в drops)
+						expected_to_currency = "XRP"
+						expected_to_issuer = "XRP"
+						// amountStr используется для определения суммы, но здесь мы только определяем валюты
+						_ = amountStr // подавляем предупреждение о неиспользуемой переменной
+					}
 
 					if account == destination {
 						amount_1_prev := decimal.Zero
@@ -411,23 +396,9 @@ func RunConsumers() {
 														rate = takerGetsDelta.Div(takerPaysDelta)
 													}
 
-													from_id := idAccount(accountAddress)
-													to_id := idAccount(accountAddress)
+													// Убрано создание from_id, to_id - больше не нужны для новой схемы
 
-													from_asset_id := ""
-													to_asset_id := ""
-
-													if prevTakerGetsCurrency == "XRP" {
-														from_asset_id = idAssetXRP()
-													} else {
-														from_asset_id = idAssetIOU(normCurrency(prevTakerGetsCurrency), prevTakerGetsIssuer)
-													}
-
-													if prevTakerPaysCurrency == "XRP" {
-														to_asset_id = idAssetXRP()
-													} else {
-														to_asset_id = idAssetIOU(normCurrency(prevTakerPaysCurrency), prevTakerPaysIssuer)
-													}
+													// Убрано создание from_asset_id, to_asset_id - больше не нужны для новой схемы
 
 													init_from_amount := decimal.Zero
 													init_to_amount := decimal.Zero
@@ -562,21 +533,27 @@ func RunConsumers() {
 													}
 
 													CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-														TxID:           txId,
-														FromID:         from_id,
-														ToID:           to_id,
-														FromAssetID:    from_asset_id,
-														ToAssetID:      to_asset_id,
-														FromAmount:     takerGetsDelta.Neg().String(),
-														ToAmount:       takerPaysDelta.String(),
-														InitFromAmount: init_from_amount.String(),
-														InitToAmount:   init_to_amount.String(),
-														Quote:          rate.String(),
-														Kind:           "dexOffer",
-														Version:        generateVersion(),
+														TxHash:            hash,
+														LedgerIndex:       uint32(ledgerIndex),
+														InLedgerIndex:     uint32(inLedgerIndex),
+														CloseTimeUnix:     closeTimeUnix,
+														FeeDrops:          feeDrops,
+														FromAddress:       accountAddress,
+														ToAddress:         accountAddress,
+														FromCurrency:      currencyToSymbol(prevTakerGetsCurrency),
+														FromIssuerAddress: fixIssuerForXRP(currencyToSymbol(prevTakerGetsCurrency), prevTakerGetsIssuer),
+														ToCurrency:        currencyToSymbol(prevTakerPaysCurrency),
+														ToIssuerAddress:   fixIssuerForXRP(currencyToSymbol(prevTakerPaysCurrency), prevTakerPaysIssuer),
+														FromAmount:        takerGetsDelta.Neg().String(),
+														ToAmount:          takerPaysDelta.String(),
+														InitFromAmount:    init_from_amount.String(),
+														InitToAmount:      init_to_amount.String(),
+														Quote:             rate.String(),
+														Kind:              "dexOffer",
+														Version:           generateVersion(),
 													})
 
-													CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: accountAddress, Version: generateVersion()})
+													// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
 												}
 											}
 										}
@@ -615,7 +592,7 @@ func RunConsumers() {
 												if issuer, ok := balance["issuer"].(string); ok {
 													issuer_account = issuer
 												} else {
-													issuer_account = ""
+													issuer_account = "XRP" // Для XRP устанавливаем "XRP" вместо пустой строки
 												}
 											}
 
@@ -685,7 +662,7 @@ func RunConsumers() {
 												if issuer, ok := low_limit["issuer"].(string); ok {
 													issuer_low_limit = issuer
 												} else {
-													issuer_low_limit = ""
+													issuer_low_limit = "XRP" // Для XRP устанавливаем "XRP" вместо пустой строки
 												}
 											}
 
@@ -770,7 +747,7 @@ func RunConsumers() {
 												if issuer, ok := high_limit["issuer"].(string); ok {
 													issuer_high_limit = issuer
 												} else {
-													issuer_high_limit = ""
+													issuer_high_limit = "XRP" // Для XRP устанавливаем "XRP" вместо пустой строки
 												}
 											}
 											if balance, ok := final_fields["Balance"].(map[string]interface{}); ok {
@@ -881,45 +858,43 @@ func RunConsumers() {
 						} else {
 							rate = from_amount.Neg().Div(to_amount)
 						}
-						from_id := idAccount(account)
-						to_id := idAccount(destination)
+						// Убрано создание from_id, to_id - больше не нужны для новой схемы
 
-						to_asset_id := ""
-						from_asset_id := ""
+						// Убрано создание from_asset_id, to_asset_id - больше не нужны для новой схемы
 
-						if to_currency == "XRP" {
-							to_asset_id = idAssetXRP()
-						} else {
-							to_asset_id = idAssetIOU(normCurrency(to_currency), to_issuer)
+						// Используем ожидаемые валюты если delta валюты пустые
+						if from_currency == "" && expected_from_currency != "" {
+							from_currency = expected_from_currency
+							from_issuer = expected_from_issuer
 						}
-
-						if from_currency == "XRP" {
-							from_asset_id = idAssetXRP()
-						} else {
-							from_asset_id = idAssetIOU(normCurrency(from_currency), from_issuer)
+						if to_currency == "" && expected_to_currency != "" {
+							to_currency = expected_to_currency
+							to_issuer = expected_to_issuer
 						}
 
 						CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-							TxID:           txId,
-							FromID:         from_id,
-							ToID:           to_id,
-							FromAssetID:    from_asset_id,
-							ToAssetID:      to_asset_id,
-							FromAmount:     from_amount.String(),
-							ToAmount:       to_amount.String(),
-							InitFromAmount: init_from_amount.String(),
-							InitToAmount:   init_to_amount.String(),
-							Quote:          rate.String(),
-							Kind:           "swap",
-							Version:        generateVersion(),
+							TxHash:            hash,
+							LedgerIndex:       uint32(ledgerIndex),
+							InLedgerIndex:     uint32(inLedgerIndex),
+							CloseTimeUnix:     closeTimeUnix,
+							FeeDrops:          feeDrops,
+							FromAddress:       account,
+							ToAddress:         destination,
+							FromCurrency:      currencyToSymbol(from_currency),
+							FromIssuerAddress: fixIssuerForXRP(currencyToSymbol(from_currency), from_issuer),
+							ToCurrency:        currencyToSymbol(to_currency),
+							ToIssuerAddress:   fixIssuerForXRP(currencyToSymbol(to_currency), to_issuer),
+							FromAmount:        from_amount.String(),
+							ToAmount:          to_amount.String(),
+							InitFromAmount:    init_from_amount.String(),
+							InitToAmount:      init_to_amount.String(),
+							Quote:             rate.String(),
+							Kind:              "swap",
+							Version:           generateVersion(),
 						})
-						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account, Version: generateVersion()})
+						// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
 					} else {
-						from_id := idAccount(account)
-						to_id := idAccount(destination)
-
-						from_asset_id := ""
-						to_asset_id := ""
+						// Убрано создание from_id, to_id - больше не нужны для новой схемы
 
 						amount := decimal.Zero
 						amount_issuer := ""
@@ -938,13 +913,20 @@ func RunConsumers() {
 							if issuer, ok := amountField["issuer"].(string); ok {
 								amount_issuer = issuer
 							} else {
-								amount_issuer = ""
+								amount_issuer = "XRP" // Для XRP устанавливаем "XRP" вместо пустой строки
 							}
 							if currency, ok := amountField["currency"].(string); ok {
 								amount_currency = currency
 							} else {
-								amount_currency = ""
+								amount_currency = "XRP"
 							}
+						} else if amountStr, ok := base["Amount"].(string); ok {
+							// Amount - это строка (XRP в drops)
+							if v, err := decimal.NewFromString(amountStr); err == nil {
+								amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+							}
+							amount_currency = "XRP"
+							amount_issuer = "XRP"
 						}
 
 						init_amount := decimal.Zero
@@ -997,34 +979,141 @@ func RunConsumers() {
 							}
 						}
 
-						if amount_currency == "XRP" {
-							from_asset_id = idAssetXRP()
-						} else {
-							from_asset_id = idAssetIOU(normCurrency(amount_currency), amount_issuer)
-						}
-
-						if amount_currency == "XRP" {
-							to_asset_id = idAssetXRP()
-						} else {
-							to_asset_id = idAssetIOU(normCurrency(amount_currency), amount_issuer)
+						// Используем ожидаемые валюты если amount_currency пустая
+						if amount_currency == "" {
+							if expected_from_currency != "" {
+								amount_currency = expected_from_currency
+								amount_issuer = expected_from_issuer
+							} else if expected_to_currency != "" {
+								amount_currency = expected_to_currency
+								amount_issuer = expected_to_issuer
+							}
 						}
 
 						CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-							TxID:           txId,
-							FromID:         from_id,
-							ToID:           to_id,
-							FromAssetID:    from_asset_id,
-							ToAssetID:      to_asset_id,
-							FromAmount:     amount.Neg().String(),
-							ToAmount:       amount.String(),
-							InitFromAmount: init_amount.Abs().String(),
-							InitToAmount:   init_amount.Abs().String(),
-							Quote:          "1",
-							Kind:           "transfer",
-							Version:        generateVersion(),
+							TxHash:            hash,
+							LedgerIndex:       uint32(ledgerIndex),
+							InLedgerIndex:     uint32(inLedgerIndex),
+							CloseTimeUnix:     closeTimeUnix,
+							FeeDrops:          feeDrops,
+							FromAddress:       account,
+							ToAddress:         destination,
+							FromCurrency:      currencyToSymbol(amount_currency),
+							FromIssuerAddress: fixIssuerForXRP(currencyToSymbol(amount_currency), amount_issuer),
+							ToCurrency:        currencyToSymbol(amount_currency),
+							ToIssuerAddress:   fixIssuerForXRP(currencyToSymbol(amount_currency), amount_issuer),
+							FromAmount:        amount.Neg().String(),
+							ToAmount:          amount.String(),
+							InitFromAmount:    init_amount.Abs().String(),
+							InitToAmount:      init_amount.Abs().String(),
+							Quote:             "1",
+							Kind:              "transfer",
+							Version:           generateVersion(),
 						})
-						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: from_id, Address: account, Version: generateVersion()})
-						CHAccountsRows = append(CHAccountsRows, models.CHAccountRow{AccountID: to_id, Address: destination, Version: generateVersion()})
+						// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
+						// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
+					}
+
+					// Если нет записей в CHMoneyFlowRows, создаем простую запись на основе SendMax и delivered_amount
+					if len(CHMoneyFlowRows) == 0 {
+						from_currency := ""
+						from_issuer := ""
+						to_currency := ""
+						to_issuer := ""
+						from_amount := decimal.Zero
+						to_amount := decimal.Zero
+
+						// Определяем from_currency и from_issuer из SendMax
+						if sm, ok := base["SendMax"].(map[string]interface{}); ok {
+							if cur, ok := sm["currency"].(string); ok {
+								from_currency = currencyToSymbol(cur)
+							}
+							if iss, ok := sm["issuer"].(string); ok {
+								from_issuer = fixIssuerForXRP(from_currency, iss)
+							}
+						}
+
+						// Определяем to_currency и to_issuer из delivered_amount или Amount
+						if meta, ok := base["meta"].(map[string]interface{}); ok {
+							if da, ok := meta["delivered_amount"].(map[string]interface{}); ok {
+								if cur, ok := da["currency"].(string); ok {
+									to_currency = currencyToSymbol(cur)
+								}
+								if iss, ok := da["issuer"].(string); ok {
+									to_issuer = fixIssuerForXRP(to_currency, iss)
+								}
+								if vs, ok := da["value"].(string); ok {
+									if _, ok := da["native"].(bool); ok {
+										if v, err := decimal.NewFromString(vs); err == nil {
+											to_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+										}
+									} else {
+										to_amount, _ = decimal.NewFromString(vs)
+									}
+								}
+							}
+						}
+
+						// Если delivered_amount не найден, используем Amount
+						if to_currency == "" {
+							if amountField, ok := base["Amount"].(map[string]interface{}); ok {
+								if cur, ok := amountField["currency"].(string); ok {
+									to_currency = currencyToSymbol(cur)
+								}
+								if iss, ok := amountField["issuer"].(string); ok {
+									to_issuer = fixIssuerForXRP(to_currency, iss)
+								}
+								if vs, ok := amountField["value"].(string); ok {
+									if _, ok := amountField["native"].(bool); ok {
+										if v, err := decimal.NewFromString(vs); err == nil {
+											to_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+										}
+									} else {
+										to_amount, _ = decimal.NewFromString(vs)
+									}
+								}
+							} else if amountStr, ok := base["Amount"].(string); ok {
+								// Amount - это строка (XRP в drops)
+								to_currency = "XRP"
+								to_issuer = "XRP"
+								if v, err := decimal.NewFromString(amountStr); err == nil {
+									to_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+								}
+							}
+						}
+
+						// Если from_currency не найден, используем to_currency (для простых переводов)
+						if from_currency == "" {
+							from_currency = to_currency
+							from_issuer = to_issuer
+						}
+
+						// Создаем запись только если есть валидные валюты
+						if from_currency != "" && to_currency != "" {
+							// Для простых переводов from_amount = to_amount
+							from_amount = to_amount
+
+							CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
+								TxHash:            hash,
+								LedgerIndex:       uint32(ledgerIndex),
+								InLedgerIndex:     uint32(inLedgerIndex),
+								CloseTimeUnix:     closeTimeUnix,
+								FeeDrops:          feeDrops,
+								FromAddress:       account,
+								ToAddress:         destination,
+								FromCurrency:      from_currency,
+								FromIssuerAddress: from_issuer,
+								ToCurrency:        to_currency,
+								ToIssuerAddress:   to_issuer,
+								FromAmount:        from_amount.Neg().String(),
+								ToAmount:          to_amount.String(),
+								InitFromAmount:    from_amount.Abs().String(),
+								InitToAmount:      to_amount.Abs().String(),
+								Quote:             "1",
+								Kind:              "transfer",
+								Version:           generateVersion(),
+							})
+						}
 					}
 
 					for _, row := range CHMoneyFlowRows {
@@ -1033,12 +1122,7 @@ func RunConsumers() {
 						}
 					}
 
-					for _, row := range CHAccountsRows {
-						address := row.Address
-						if row, err := json.Marshal(row); err == nil {
-							_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHAccounts(), Key: []byte(address), Value: row})
-						}
-					}
+					// Убрано отправка CHAccountsRows - таблицы accounts больше нет
 				}
 			}
 		}

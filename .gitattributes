@@ -1,0 +1,19 @@
+# Установить LF для всех текстовых файлов
+* text=auto eol=lf
+
+# Особенно для скриптов
+*.sh text eol=lf
+*.bash text eol=lf
+*.py text eol=lf
+*.go text eol=lf
+*.sql text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+
+# Бинарные файлы
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
