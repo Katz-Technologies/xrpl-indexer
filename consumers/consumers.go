@@ -928,7 +928,8 @@ func RunConsumers() {
 							}
 						}
 
-						init_amount := decimal.Zero
+						init_from_amount := decimal.Zero
+						init_to_amount := decimal.Zero
 
 						for _, n := range nodes {
 							node, _ := n.(map[string]interface{})
@@ -943,7 +944,7 @@ func RunConsumers() {
 														if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
 															if balanceStr, ok := previousField["Balance"].(string); ok {
 																if v, err := decimal.NewFromString(balanceStr); err == nil {
-																	init_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																	init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 																}
 															}
 														}
@@ -962,7 +963,55 @@ func RunConsumers() {
 																	if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
 																		if balance, ok := previousField["Balance"].(map[string]interface{}); ok {
 																			if vs, ok := balance["value"].(string); ok {
-																				init_amount, _ = decimal.NewFromString(vs)
+																				init_from_amount, _ = decimal.NewFromString(vs)
+																			}
+																		}
+																	}
+																}
+															}
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+						}
+
+						for _, n := range nodes {
+							node, _ := n.(map[string]interface{})
+
+							if modifiedNodes, ok := node["ModifiedNode"].(map[string]interface{}); ok {
+								if ledgerEntryType, ok := modifiedNodes["LedgerEntryType"].(string); ok {
+									if amount_currency == "XRP" {
+										if ledgerEntryType == "AccountRoot" {
+											if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+												if finalFieldAccount, ok := finalField["Account"].(string); ok {
+													if finalFieldAccount == destination {
+														if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+															if balanceStr, ok := previousField["Balance"].(string); ok {
+																if v, err := decimal.NewFromString(balanceStr); err == nil {
+																	init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																}
+															}
+														}
+													}
+												}
+											}
+										}
+									} else {
+										if ledgerEntryType == "RippleState" {
+											if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+												if lowLimit, ok := finalField["LowLimit"].(map[string]interface{}); ok {
+													if lowLimitAccount, ok := lowLimit["issuer"].(string); ok {
+														if highLimit, ok := finalField["HighLimit"].(map[string]interface{}); ok {
+															if highLimitAccount, ok := highLimit["issuer"].(string); ok {
+																if lowLimitAccount == destination || highLimitAccount == destination {
+																	if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+																		if balance, ok := previousField["Balance"].(map[string]interface{}); ok {
+																			if vs, ok := balance["value"].(string); ok {
+																				init_from_amount, _ = decimal.NewFromString(vs)
 																			}
 																		}
 																	}
@@ -1003,8 +1052,8 @@ func RunConsumers() {
 							ToIssuerAddress:   fixIssuerForXRP(currencyToSymbol(amount_currency), amount_issuer),
 							FromAmount:        amount.Neg().String(),
 							ToAmount:          amount.String(),
-							InitFromAmount:    init_amount.Abs().String(),
-							InitToAmount:      init_amount.Abs().String(),
+							InitFromAmount:    init_from_amount.Abs().String(),
+							InitToAmount:      init_to_amount.Abs().String(),
 							Quote:             "1",
 							Kind:              "transfer",
 							Version:           generateVersion(),
