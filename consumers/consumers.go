@@ -925,27 +925,33 @@ func RunConsumers() {
 						amount_issuer := ""
 						amount_currency := ""
 
-						if amountField, ok := base["Amount"].(map[string]interface{}); ok {
-							if vs, ok := amountField["value"].(string); ok {
-								if _, ok := amountField["native"].(bool); ok {
-									if v, err := decimal.NewFromString(vs); err == nil {
-										amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-									}
-								} else {
-									amount, _ = decimal.NewFromString(vs)
-								}
-							}
-							if issuer, ok := amountField["issuer"].(string); ok {
-								amount_issuer = issuer
-							} else {
-								amount_issuer = ""
-							}
-							if currency, ok := amountField["currency"].(string); ok {
-								amount_currency = currency
-							} else {
-								amount_currency = ""
-							}
-						}
+            if amountField, ok := meta["delivered_amount"].(map[string]interface{}); ok {
+              if vs, ok := amountField["value"].(string); ok {
+                if _, ok := amountField["native"].(bool); ok {
+                  if v, err := decimal.NewFromString(vs); err == nil {
+                    amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+                  }
+                } else {
+                  amount, _ = decimal.NewFromString(vs)
+                }
+              }
+              if issuer, ok := amountField["issuer"].(string); ok {
+                amount_issuer = issuer
+              } else {
+                amount_issuer = ""
+              }
+              if currency, ok := amountField["currency"].(string); ok {
+                amount_currency = currency
+              } else {
+                amount_currency = "XRP"
+              }
+            } else {
+              if amountField, ok := meta["delivered_amount"].(string); ok {
+                amount, _ = decimal.NewFromString(amountField)
+                amount_issuer = ""
+                amount_currency = "XRP"
+              }
+            }
 
 						init_amount := decimal.Zero
 
