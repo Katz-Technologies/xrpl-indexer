@@ -992,7 +992,7 @@ func RunConsumers() {
 														if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
 															if balanceStr, ok := previousField["Balance"].(string); ok {
 																if v, err := decimal.NewFromString(balanceStr); err == nil {
-																	init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																	init_to_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
 																}
 															}
 														}
@@ -1011,7 +1011,7 @@ func RunConsumers() {
 																	if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
 																		if balance, ok := previousField["Balance"].(map[string]interface{}); ok {
 																			if vs, ok := balance["value"].(string); ok {
-																				init_from_amount, _ = decimal.NewFromString(vs)
+																				init_to_amount, _ = decimal.NewFromString(vs)
 																			}
 																		}
 																	}
