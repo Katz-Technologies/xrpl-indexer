@@ -900,7 +900,7 @@ func RunConsumers() {
 						amount_issuer := ""
 						amount_currency := ""
 
-						if amountField, ok := base["Amount"].(map[string]interface{}); ok {
+						if amountField, ok := meta["delivered_amount"].(map[string]interface{}); ok {
 							if vs, ok := amountField["value"].(string); ok {
 								if _, ok := amountField["native"].(bool); ok {
 									if v, err := decimal.NewFromString(vs); err == nil {
@@ -913,20 +913,19 @@ func RunConsumers() {
 							if issuer, ok := amountField["issuer"].(string); ok {
 								amount_issuer = issuer
 							} else {
-								amount_issuer = "XRP" // Для XRP устанавливаем "XRP" вместо пустой строки
+								amount_issuer = "XRP"
 							}
 							if currency, ok := amountField["currency"].(string); ok {
 								amount_currency = currency
 							} else {
 								amount_currency = "XRP"
 							}
-						} else if amountStr, ok := base["Amount"].(string); ok {
-							// Amount - это строка (XRP в drops)
-							if v, err := decimal.NewFromString(amountStr); err == nil {
-								amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+						} else {
+							if amountField, ok := meta["delivered_amount"].(string); ok {
+								amount, _ = decimal.NewFromString(amountField)
+								amount_issuer = "XRP"
+								amount_currency = "XRP"
 							}
-							amount_currency = "XRP"
-							amount_issuer = "XRP"
 						}
 
 						init_amount := decimal.Zero
