@@ -895,66 +895,130 @@ func RunConsumers() {
 						// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
 					} else {
 						transfer_to_issuer := false
-						amm_transfer_currency := ""
 
 						if amount, ok := base["Amount"].(map[string]interface{}); ok {
 							if issuer, ok := amount["issuer"].(string); ok {
 								if issuer == destination {
 									transfer_to_issuer = true
 								}
-								if curr, ok := amount["currency"].(string); ok {
-									amm_transfer_currency = curr
-								}
 							}
 						}
 
 						if transfer_to_issuer {
+							// --- Инициализация переменных ---
 							account_init_from_amount := decimal.Zero
 							account_from_amount := decimal.Zero
-
+						
 							amm_address := ""
 							amm_init_from_amount := decimal.Zero
 							amm_init_to_amount := decimal.Zero
 							amm_from_amount := decimal.Zero
 							amm_to_amount := decimal.Zero
-
+						
+							// --- Определяем валюту burn-транзакции ---
+							burn_currency := ""
+							burn_issuer := destination
+							burn_amount := decimal.Zero
+						
+							if amount, ok := base["Amount"].(map[string]interface{}); ok {
+								if curr, ok := amount["currency"].(string); ok {
+									burn_currency = curr
+								}
+								if val, ok := amount["value"].(string); ok {
+									if v, err := decimal.NewFromString(val); err == nil {
+										burn_amount = v
+									}
+								}
+							}
+						
+							// --- Проверяем, участвует ли AMM ---
+							isAmmInvolved := false
+						
 							for _, n := range nodes {
 								node, _ := n.(map[string]interface{})
-
 								if modifiedNodes, ok := node["ModifiedNode"].(map[string]interface{}); ok {
 									if ledgerEntryType, ok := modifiedNodes["LedgerEntryType"].(string); ok {
 										if ledgerEntryType == "AccountRoot" {
 											if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
 												if finalFieldAccount, ok := finalField["Account"].(string); ok {
-													if finalFieldAccount == account {
-														if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
-															if balanceStr, ok := previousField["Balance"].(string); ok {
-																if v, err := decimal.NewFromString(balanceStr); err == nil {
-																	account_init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-
-																	if finalFieldBalance, ok := finalField["Balance"].(string); ok {
-																		if v, err := decimal.NewFromString(finalFieldBalance); err == nil {
-																			final_field_amount := v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-																			account_from_amount = final_field_amount.Sub(account_init_from_amount)
+													// AMM — это не отправитель и не получатель (issuer)
+													if finalFieldAccount != account && finalFieldAccount != destination {
+														isAmmInvolved = true
+														amm_address = finalFieldAccount
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+							
+							isBurnEnd := false
+							// ===================================================================
+							// === CASE 1: Manual burn (отправитель → эмитент напрямую) ==========
+							// ===================================================================
+							if !isAmmInvolved {
+								CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
+									TxHash:            hash,
+									LedgerIndex:       uint32(ledgerIndex),
+									InLedgerIndex:     uint32(inLedgerIndex),
+									CloseTimeUnix:     closeTimeUnix,
+									FeeDrops:          feeDrops,
+									FromAddress:       account,
+									ToAddress:         "",
+									FromCurrency:      currencyToSymbol(burn_currency),
+									FromIssuerAddress: burn_issuer,
+									ToCurrency:        currencyToSymbol(burn_currency),
+									ToIssuerAddress:   burn_issuer,
+									FromAmount:        burn_amount.Abs().Neg().String(),
+									ToAmount:          decimal.Zero.String(),
+									InitFromAmount:    burn_amount.Abs().String(),
+									InitToAmount:      decimal.Zero.String(),
+									Quote:             "1",
+									Kind:              "transfer",
+									Version:           generateVersion(),
+								})
+								isBurnEnd = true
+							}
+						
+							// ===================================================================
+							// === CASE 2: Burn через AMM (path payment к issuer) ================
+							// ===================================================================
+							// Собираем данные по узлам, как раньше
+							if !isBurnEnd {
+								for _, n := range nodes {
+									node, _ := n.(map[string]interface{})
+									if modifiedNodes, ok := node["ModifiedNode"].(map[string]interface{}); ok {
+										if ledgerEntryType, ok := modifiedNodes["LedgerEntryType"].(string); ok {
+											switch ledgerEntryType {
+											case "AccountRoot":
+												if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+													if finalFieldAccount, ok := finalField["Account"].(string); ok {
+														// === Изменение баланса отправителя (XRP) ===
+														if finalFieldAccount == account {
+															if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+																if balanceStr, ok := previousField["Balance"].(string); ok {
+																	if v, err := decimal.NewFromString(balanceStr); err == nil {
+																		account_init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																		if finalFieldBalance, ok := finalField["Balance"].(string); ok {
+																			if v, err := decimal.NewFromString(finalFieldBalance); err == nil {
+																				final_field_amount := v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																				account_from_amount = final_field_amount.Sub(account_init_from_amount)
+																			}
 																		}
 																	}
 																}
 															}
-														}
-													} else {
-														if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
-															if balanceStr, ok := previousField["Balance"].(string); ok {
-																if v, err := decimal.NewFromString(balanceStr); err == nil {
-																	amm_init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-																}
-																if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
-																	if finalFieldAccount, ok := finalField["Account"].(string); ok {
-																		amm_address = finalFieldAccount
-																		if finalFieldBalance, ok := finalField["Balance"].(string); ok {
-																			if v, err := decimal.NewFromString(finalFieldBalance); err == nil {
-																				final_field_amount := v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-																				amm_from_amount = final_field_amount.Sub(amm_init_from_amount)
-																			}
+														} else { // === Баланс AMM ===
+															if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+																if balanceStr, ok := previousField["Balance"].(string); ok {
+																	if v, err := decimal.NewFromString(balanceStr); err == nil {
+																		amm_init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																	}
+																	if finalFieldBalance, ok := finalField["Balance"].(string); ok {
+																		if v, err := decimal.NewFromString(finalFieldBalance); err == nil {
+																			final_field_amount := v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																			amm_from_amount = final_field_amount.Sub(amm_init_from_amount)
 																		}
 																	}
 																}
@@ -962,9 +1026,7 @@ func RunConsumers() {
 														}
 													}
 												}
-											}
-										} else {
-											if ledgerEntryType == "RippleState" {
+											case "RippleState":
 												if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
 													if lowLimit, ok := finalField["LowLimit"].(map[string]interface{}); ok {
 														if lowLimitAccount, ok := lowLimit["issuer"].(string); ok {
@@ -994,52 +1056,54 @@ func RunConsumers() {
 										}
 									}
 								}
+							
+								// === Запись 1: Отправитель → AMM (XRP) ===
+								CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
+									TxHash:            hash,
+									LedgerIndex:       uint32(ledgerIndex),
+									InLedgerIndex:     uint32(inLedgerIndex),
+									CloseTimeUnix:     closeTimeUnix,
+									FeeDrops:          feeDrops,
+									FromAddress:       account,
+									ToAddress:         amm_address,
+									FromCurrency:      "XRP",
+									FromIssuerAddress: "XRP",
+									ToCurrency:        "XRP",
+									ToIssuerAddress:   "XRP",
+									FromAmount:        account_from_amount.Abs().Neg().String(),
+									ToAmount:          amm_to_amount.Abs().String(),
+									InitFromAmount:    account_init_from_amount.Abs().String(),
+									InitToAmount:      amm_init_to_amount.Abs().String(),
+									Quote:             "1",
+									Kind:              "transfer",
+									Version:           generateVersion(),
+								})
+							
+								// === Запись 2: AMM → issuer (burn IOU) ===
+								CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
+									TxHash:            hash,
+									LedgerIndex:       uint32(ledgerIndex),
+									InLedgerIndex:     uint32(inLedgerIndex),
+									CloseTimeUnix:     closeTimeUnix,
+									FeeDrops:          feeDrops,
+									FromAddress:       amm_address,
+									ToAddress:         "",
+									FromCurrency:      currencyToSymbol(burn_currency),
+									FromIssuerAddress: burn_issuer,
+									ToCurrency:        currencyToSymbol(burn_currency),
+									ToIssuerAddress:   burn_issuer,
+									FromAmount:        amm_from_amount.Abs().Neg().String(),
+									ToAmount:          decimal.Zero.String(),
+									InitFromAmount:    amm_init_from_amount.Abs().String(),
+									InitToAmount:      decimal.Zero.String(),
+									Quote:             "1",
+									Kind:              "transfer",
+									Version:           generateVersion(),
+								})
 							}
-
-							CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-								TxHash:            hash,
-								LedgerIndex:       uint32(ledgerIndex),
-								InLedgerIndex:     uint32(inLedgerIndex),
-								CloseTimeUnix:     closeTimeUnix,
-								FeeDrops:          feeDrops,
-								FromAddress:       account,
-								ToAddress:         amm_address,
-								FromCurrency:      "XRP",
-								FromIssuerAddress: "XRP",
-								ToCurrency:        "XRP",
-								ToIssuerAddress:   "XRP",
-								FromAmount:        account_from_amount.Abs().Neg().String(),
-								ToAmount:          amm_to_amount.Abs().String(),
-								InitFromAmount:    account_init_from_amount.Abs().String(),
-								InitToAmount:      amm_init_to_amount.Abs().String(),
-								Quote:             "1",
-								Kind:              "transfer",
-								Version:           generateVersion(),
-							})
-
-							CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-								TxHash:            hash,
-								LedgerIndex:       uint32(ledgerIndex),
-								InLedgerIndex:     uint32(inLedgerIndex),
-								CloseTimeUnix:     closeTimeUnix,
-								FeeDrops:          feeDrops,
-								FromAddress:       amm_address,
-								ToAddress:         "",
-								FromCurrency:      amm_transfer_currency,
-								FromIssuerAddress: destination,
-								ToCurrency:        amm_transfer_currency,
-								ToIssuerAddress:   destination,
-								FromAmount:        amm_from_amount.Abs().Neg().String(),
-								ToAmount:          decimal.Zero.Abs().String(),
-								InitFromAmount:    amm_init_from_amount.Abs().String(),
-								InitToAmount:      decimal.Zero.Abs().String(),
-								Quote:             "1",
-								Kind:              "transfer",
-								Version:           generateVersion(),
-							})
 						} else {
 
-						// Убрано создание from_id, to_id - больше не нужны для новой схемы
+							// Убрано создание from_id, to_id - больше не нужны для новой схемы
 
 							amount := decimal.Zero
 							amount_issuer := ""
