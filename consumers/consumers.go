@@ -894,49 +894,35 @@ func RunConsumers() {
 						})
 						// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
 					} else {
-						// Убрано создание from_id, to_id - больше не нужны для новой схемы
+						transfer_to_issuer := false
+						amm_transfer_currency := ""
 
-						amount := decimal.Zero
-						amount_issuer := ""
-						amount_currency := ""
-
-						if amountField, ok := meta["delivered_amount"].(map[string]interface{}); ok {
-							if vs, ok := amountField["value"].(string); ok {
-								if _, ok := amountField["native"].(bool); ok {
-									if v, err := decimal.NewFromString(vs); err == nil {
-										amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-									}
-								} else {
-									amount, _ = decimal.NewFromString(vs)
+						if amount, ok := base["Amount"].(map[string]interface{}); ok {
+							if issuer, ok := amount["issuer"].(string); ok {
+								if issuer == destination {
+									transfer_to_issuer = true
 								}
-							}
-							if issuer, ok := amountField["issuer"].(string); ok {
-								amount_issuer = issuer
-							} else {
-								amount_issuer = "XRP"
-							}
-							if currency, ok := amountField["currency"].(string); ok {
-								amount_currency = currency
-							} else {
-								amount_currency = "XRP"
-							}
-						} else {
-							if amountField, ok := meta["delivered_amount"].(string); ok {
-								amount, _ = decimal.NewFromString(amountField)
-								amount_issuer = "XRP"
-								amount_currency = "XRP"
+								if curr, ok := amount["currency"].(string); ok {
+									amm_transfer_currency = curr
+								}
 							}
 						}
 
-						init_from_amount := decimal.Zero
-						init_to_amount := decimal.Zero
+						if transfer_to_issuer {
+							account_init_from_amount := decimal.Zero
+							account_from_amount := decimal.Zero
 
-						for _, n := range nodes {
-							node, _ := n.(map[string]interface{})
+							amm_address := ""
+							amm_init_from_amount := decimal.Zero
+							amm_init_to_amount := decimal.Zero
+							amm_from_amount := decimal.Zero
+							amm_to_amount := decimal.Zero
 
-							if modifiedNodes, ok := node["ModifiedNode"].(map[string]interface{}); ok {
-								if ledgerEntryType, ok := modifiedNodes["LedgerEntryType"].(string); ok {
-									if amount_currency == "XRP" {
+							for _, n := range nodes {
+								node, _ := n.(map[string]interface{})
+
+								if modifiedNodes, ok := node["ModifiedNode"].(map[string]interface{}); ok {
+									if ledgerEntryType, ok := modifiedNodes["LedgerEntryType"].(string); ok {
 										if ledgerEntryType == "AccountRoot" {
 											if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
 												if finalFieldAccount, ok := finalField["Account"].(string); ok {
@@ -944,74 +930,58 @@ func RunConsumers() {
 														if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
 															if balanceStr, ok := previousField["Balance"].(string); ok {
 																if v, err := decimal.NewFromString(balanceStr); err == nil {
-																	init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
-																}
-															}
-														}
-													}
-												}
-											}
-										}
-									} else {
-										if ledgerEntryType == "RippleState" {
-											if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
-												if lowLimit, ok := finalField["LowLimit"].(map[string]interface{}); ok {
-													if lowLimitAccount, ok := lowLimit["issuer"].(string); ok {
-														if highLimit, ok := finalField["HighLimit"].(map[string]interface{}); ok {
-															if highLimitAccount, ok := highLimit["issuer"].(string); ok {
-																if lowLimitAccount == account || highLimitAccount == account {
-																	if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
-																		if balance, ok := previousField["Balance"].(map[string]interface{}); ok {
-																			if vs, ok := balance["value"].(string); ok {
-																				init_from_amount, _ = decimal.NewFromString(vs)
-																			}
+																	account_init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+
+																	if finalFieldBalance, ok := finalField["Balance"].(string); ok {
+																		if v, err := decimal.NewFromString(finalFieldBalance); err == nil {
+																			final_field_amount := v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																			account_from_amount = final_field_amount.Sub(account_init_from_amount)
 																		}
 																	}
 																}
 															}
 														}
-													}
-												}
-											}
-										}
-									}
-								}
-							}
-						}
-
-						for _, n := range nodes {
-							node, _ := n.(map[string]interface{})
-
-							if modifiedNodes, ok := node["ModifiedNode"].(map[string]interface{}); ok {
-								if ledgerEntryType, ok := modifiedNodes["LedgerEntryType"].(string); ok {
-									if amount_currency == "XRP" {
-										if ledgerEntryType == "AccountRoot" {
-											if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
-												if finalFieldAccount, ok := finalField["Account"].(string); ok {
-													if finalFieldAccount == destination {
+													} else {
 														if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
 															if balanceStr, ok := previousField["Balance"].(string); ok {
 																if v, err := decimal.NewFromString(balanceStr); err == nil {
-																	init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																	amm_init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																}
+																if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+																	if finalFieldAccount, ok := finalField["Account"].(string); ok {
+																		amm_address = finalFieldAccount
+																		if finalFieldBalance, ok := finalField["Balance"].(string); ok {
+																			if v, err := decimal.NewFromString(finalFieldBalance); err == nil {
+																				final_field_amount := v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																				amm_from_amount = final_field_amount.Sub(amm_init_from_amount)
+																			}
+																		}
+																	}
 																}
 															}
 														}
 													}
 												}
 											}
-										}
-									} else {
-										if ledgerEntryType == "RippleState" {
-											if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
-												if lowLimit, ok := finalField["LowLimit"].(map[string]interface{}); ok {
-													if lowLimitAccount, ok := lowLimit["issuer"].(string); ok {
-														if highLimit, ok := finalField["HighLimit"].(map[string]interface{}); ok {
-															if highLimitAccount, ok := highLimit["issuer"].(string); ok {
-																if lowLimitAccount == destination || highLimitAccount == destination {
-																	if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
-																		if balance, ok := previousField["Balance"].(map[string]interface{}); ok {
-																			if vs, ok := balance["value"].(string); ok {
-																				init_from_amount, _ = decimal.NewFromString(vs)
+										} else {
+											if ledgerEntryType == "RippleState" {
+												if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+													if lowLimit, ok := finalField["LowLimit"].(map[string]interface{}); ok {
+														if lowLimitAccount, ok := lowLimit["issuer"].(string); ok {
+															if highLimit, ok := finalField["HighLimit"].(map[string]interface{}); ok {
+																if highLimitAccount, ok := highLimit["issuer"].(string); ok {
+																	if lowLimitAccount == destination || highLimitAccount == destination {
+																		if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+																			if balance, ok := previousField["Balance"].(map[string]interface{}); ok {
+																				if vs, ok := balance["value"].(string); ok {
+																					amm_init_to_amount, _ = decimal.NewFromString(vs)
+																				}
+																				if finalFieldBalance, ok := finalField["Balance"].(map[string]interface{}); ok {
+																					if vs, ok := finalFieldBalance["value"].(string); ok {
+																						final_field_amount, _ := decimal.NewFromString(vs)
+																						amm_to_amount = final_field_amount.Sub(amm_init_to_amount)
+																					}
+																				}
 																			}
 																		}
 																	}
@@ -1025,41 +995,217 @@ func RunConsumers() {
 									}
 								}
 							}
-						}
 
-						// Используем ожидаемые валюты если amount_currency пустая
-						if amount_currency == "" {
-							if expected_from_currency != "" {
-								amount_currency = expected_from_currency
-								amount_issuer = expected_from_issuer
-							} else if expected_to_currency != "" {
-								amount_currency = expected_to_currency
-								amount_issuer = expected_to_issuer
+							CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
+								TxHash:            hash,
+								LedgerIndex:       uint32(ledgerIndex),
+								InLedgerIndex:     uint32(inLedgerIndex),
+								CloseTimeUnix:     closeTimeUnix,
+								FeeDrops:          feeDrops,
+								FromAddress:       account,
+								ToAddress:         amm_address,
+								FromCurrency:      "XRP",
+								FromIssuerAddress: "XRP",
+								ToCurrency:        "XRP",
+								ToIssuerAddress:   "XRP",
+								FromAmount:        account_from_amount.Abs().Neg().String(),
+								ToAmount:          amm_to_amount.Abs().String(),
+								InitFromAmount:    account_init_from_amount.Abs().String(),
+								InitToAmount:      amm_init_to_amount.Abs().String(),
+								Quote:             "1",
+								Kind:              "transfer",
+								Version:           generateVersion(),
+							})
+
+							CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
+								TxHash:            hash,
+								LedgerIndex:       uint32(ledgerIndex),
+								InLedgerIndex:     uint32(inLedgerIndex),
+								CloseTimeUnix:     closeTimeUnix,
+								FeeDrops:          feeDrops,
+								FromAddress:       amm_address,
+								ToAddress:         "",
+								FromCurrency:      amm_transfer_currency,
+								FromIssuerAddress: destination,
+								ToCurrency:        amm_transfer_currency,
+								ToIssuerAddress:   destination,
+								FromAmount:        amm_from_amount.Abs().Neg().String(),
+								ToAmount:          decimal.Zero.Abs().String(),
+								InitFromAmount:    amm_init_from_amount.Abs().String(),
+								InitToAmount:      decimal.Zero.Abs().String(),
+								Quote:             "1",
+								Kind:              "transfer",
+								Version:           generateVersion(),
+							})
+						} else {
+
+						// Убрано создание from_id, to_id - больше не нужны для новой схемы
+
+							amount := decimal.Zero
+							amount_issuer := ""
+							amount_currency := ""
+
+							if amountField, ok := meta["delivered_amount"].(map[string]interface{}); ok {
+								if vs, ok := amountField["value"].(string); ok {
+									if _, ok := amountField["native"].(bool); ok {
+										if v, err := decimal.NewFromString(vs); err == nil {
+											amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+										}
+									} else {
+										amount, _ = decimal.NewFromString(vs)
+									}
+								}
+								if issuer, ok := amountField["issuer"].(string); ok {
+									amount_issuer = issuer
+								} else {
+									amount_issuer = "XRP"
+								}
+								if currency, ok := amountField["currency"].(string); ok {
+									amount_currency = currency
+								} else {
+									amount_currency = "XRP"
+								}
+							} else {
+								if amountField, ok := meta["delivered_amount"].(string); ok {
+									amount, _ = decimal.NewFromString(amountField)
+									amount_issuer = "XRP"
+									amount_currency = "XRP"
+								}
 							}
-						}
 
-						CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
-							TxHash:            hash,
-							LedgerIndex:       uint32(ledgerIndex),
-							InLedgerIndex:     uint32(inLedgerIndex),
-							CloseTimeUnix:     closeTimeUnix,
-							FeeDrops:          feeDrops,
-							FromAddress:       account,
-							ToAddress:         destination,
-							FromCurrency:      currencyToSymbol(amount_currency),
-							FromIssuerAddress: fixIssuerForXRP(currencyToSymbol(amount_currency), amount_issuer),
-							ToCurrency:        currencyToSymbol(amount_currency),
-							ToIssuerAddress:   fixIssuerForXRP(currencyToSymbol(amount_currency), amount_issuer),
-							FromAmount:        amount.Neg().String(),
-							ToAmount:          amount.String(),
-							InitFromAmount:    init_from_amount.Abs().String(),
-							InitToAmount:      init_to_amount.Abs().String(),
-							Quote:             "1",
-							Kind:              "transfer",
-							Version:           generateVersion(),
-						})
-						// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
-						// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
+							init_from_amount := decimal.Zero
+							init_to_amount := decimal.Zero
+
+							for _, n := range nodes {
+								node, _ := n.(map[string]interface{})
+
+								if modifiedNodes, ok := node["ModifiedNode"].(map[string]interface{}); ok {
+									if ledgerEntryType, ok := modifiedNodes["LedgerEntryType"].(string); ok {
+										if amount_currency == "XRP" {
+											if ledgerEntryType == "AccountRoot" {
+												if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+													if finalFieldAccount, ok := finalField["Account"].(string); ok {
+														if finalFieldAccount == account {
+															if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+																if balanceStr, ok := previousField["Balance"].(string); ok {
+																	if v, err := decimal.NewFromString(balanceStr); err == nil {
+																		init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																	}
+																}
+															}
+														}
+													}
+												}
+											}
+										} else {
+											if ledgerEntryType == "RippleState" {
+												if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+													if lowLimit, ok := finalField["LowLimit"].(map[string]interface{}); ok {
+														if lowLimitAccount, ok := lowLimit["issuer"].(string); ok {
+															if highLimit, ok := finalField["HighLimit"].(map[string]interface{}); ok {
+																if highLimitAccount, ok := highLimit["issuer"].(string); ok {
+																	if lowLimitAccount == account || highLimitAccount == account {
+																		if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+																			if balance, ok := previousField["Balance"].(map[string]interface{}); ok {
+																				if vs, ok := balance["value"].(string); ok {
+																					init_from_amount, _ = decimal.NewFromString(vs)
+																				}
+																			}
+																		}
+																	}
+																}
+															}
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+
+							for _, n := range nodes {
+								node, _ := n.(map[string]interface{})
+
+								if modifiedNodes, ok := node["ModifiedNode"].(map[string]interface{}); ok {
+									if ledgerEntryType, ok := modifiedNodes["LedgerEntryType"].(string); ok {
+										if amount_currency == "XRP" {
+											if ledgerEntryType == "AccountRoot" {
+												if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+													if finalFieldAccount, ok := finalField["Account"].(string); ok {
+														if finalFieldAccount == destination {
+															if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+																if balanceStr, ok := previousField["Balance"].(string); ok {
+																	if v, err := decimal.NewFromString(balanceStr); err == nil {
+																		init_from_amount = v.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP)))
+																	}
+																}
+															}
+														}
+													}
+												}
+											}
+										} else {
+											if ledgerEntryType == "RippleState" {
+												if finalField, ok := modifiedNodes["FinalFields"].(map[string]interface{}); ok {
+													if lowLimit, ok := finalField["LowLimit"].(map[string]interface{}); ok {
+														if lowLimitAccount, ok := lowLimit["issuer"].(string); ok {
+															if highLimit, ok := finalField["HighLimit"].(map[string]interface{}); ok {
+																if highLimitAccount, ok := highLimit["issuer"].(string); ok {
+																	if lowLimitAccount == destination || highLimitAccount == destination {
+																		if previousField, ok := modifiedNodes["PreviousFields"].(map[string]interface{}); ok {
+																			if balance, ok := previousField["Balance"].(map[string]interface{}); ok {
+																				if vs, ok := balance["value"].(string); ok {
+																					init_from_amount, _ = decimal.NewFromString(vs)
+																				}
+																			}
+																		}
+																	}
+																}
+															}
+														}
+													}
+												}
+											}
+										}
+									}
+								}
+							}
+
+							// Используем ожидаемые валюты если amount_currency пустая
+							if amount_currency == "" {
+								if expected_from_currency != "" {
+									amount_currency = expected_from_currency
+									amount_issuer = expected_from_issuer
+								} else if expected_to_currency != "" {
+									amount_currency = expected_to_currency
+									amount_issuer = expected_to_issuer
+								}
+							}
+
+							CHMoneyFlowRows = append(CHMoneyFlowRows, models.CHMoneyFlowRow{
+								TxHash:            hash,
+								LedgerIndex:       uint32(ledgerIndex),
+								InLedgerIndex:     uint32(inLedgerIndex),
+								CloseTimeUnix:     closeTimeUnix,
+								FeeDrops:          feeDrops,
+								FromAddress:       account,
+								ToAddress:         destination,
+								FromCurrency:      currencyToSymbol(amount_currency),
+								FromIssuerAddress: fixIssuerForXRP(currencyToSymbol(amount_currency), amount_issuer),
+								ToCurrency:        currencyToSymbol(amount_currency),
+								ToIssuerAddress:   fixIssuerForXRP(currencyToSymbol(amount_currency), amount_issuer),
+								FromAmount:        amount.Neg().String(),
+								ToAmount:          amount.String(),
+								InitFromAmount:    init_from_amount.Abs().String(),
+								InitToAmount:      init_to_amount.Abs().String(),
+								Quote:             "1",
+								Kind:              "transfer",
+								Version:           generateVersion(),
+							})
+							// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
+							// Убрано добавление в CHAccountsRows - таблицы accounts больше нет
+						}
 					}
 
 					// Если нет записей в CHMoneyFlowRows, создаем простую запись на основе SendMax и delivered_amount
