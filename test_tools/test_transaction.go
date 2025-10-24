@@ -1,22 +1,13 @@
-package consumers
+package main
 
 import (
-	"context"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
-	"strconv"
 	"strings"
-	"time"
 
-	"github.com/segmentio/kafka-go"
 	"github.com/shopspring/decimal"
-	"github.com/xrpscan/platform/config"
-	"github.com/xrpscan/platform/connections"
-	"github.com/xrpscan/platform/indexer"
-	"github.com/xrpscan/platform/logger"
-	"github.com/xrpscan/platform/models"
 )
 
 // =========================
@@ -26,13 +17,11 @@ import (
 type ChangeKind string
 
 const (
-	KindFee       ChangeKind = "Fee"
-	KindSwap      ChangeKind = "Swap"
-	KindDexOffer  ChangeKind = "DexOffer"
-	KindTransfer  ChangeKind = "Transfer"
-	KindBurn      ChangeKind = "Burn"
-	KindLiquidity ChangeKind = "Liquidity"
-	KindUnknown   ChangeKind = "Unknown"
+	KindFee      ChangeKind = "Fee"
+	KindSwap     ChangeKind = "Swap"
+	KindDexOffer ChangeKind = "DexOffer"
+	KindTransfer ChangeKind = "Transfer"
+	KindUnknown  ChangeKind = "Unknown"
 )
 
 type BalanceChange struct {
@@ -41,170 +30,6 @@ type BalanceChange struct {
 	Issuer   string
 	Delta    decimal.Decimal
 	Kind     ChangeKind
-}
-
-var (
-	eps           = decimal.NewFromFloat(1e-9)
-	dustThreshold = decimal.NewFromFloat(1e-12) // всё меньше — считаем нулём
-	maxIOUValue   = decimal.NewFromFloat(1e20)  // всё больше — считаем мусором
-)
-
-// normalizeAmount ограничивает диапазон и убирает "пыль" IOU-значений
-func normalizeAmount(val decimal.Decimal) decimal.Decimal {
-	abs := val.Abs()
-
-	if abs.LessThan(dustThreshold) {
-		return decimal.Zero
-	}
-
-	if abs.GreaterThan(maxIOUValue) {
-		return decimal.Zero
-	}
-
-	return val
-}
-
-// =========================
-// Grouping into Actions
-// =========================
-
-type ActionKind string
-
-const (
-	ActTransfer  ActionKind = "Transfer"
-	ActSwap      ActionKind = "Swap"      // одно лицо: -X +Y
-	ActDexOffer  ActionKind = "DexOffer"  // одно лицо: -A +B (не отправитель/получатель)
-	ActFee       ActionKind = "Fee"       // -XRP комиссия
-	ActBurn      ActionKind = "Burn"      // сжигание токенов (отправка эмитенту)
-	ActLiquidity ActionKind = "Liquidity" // вывод ликвидности (депозит в AMM)
-	ActUnknown   ActionKind = "Unknown"
-)
-
-type Side struct {
-	Account  string
-	Currency string
-	Issuer   string
-	Amount   decimal.Decimal // + получено, - отправлено
-}
-
-type Action struct {
-	Kind  ActionKind
-	Sides []Side // 1..2 стороны (fee=1, swap/dexOffer=2, transfer=2)
-	Note  string // опционально, для отладки/вывода
-}
-
-func sign(x decimal.Decimal) int {
-	switch {
-	case x.GreaterThan(eps):
-		return +1
-	case x.LessThan(eps.Neg()):
-		return -1
-	default:
-		return 0
-	}
-}
-
-// decodeHexCurrency конвертирует HEX валюту в читаемый символ
-func decodeHexCurrency(cur string) (string, bool) {
-	if len(cur) != 40 {
-		return "", false
-	}
-	b, err := hex.DecodeString(cur)
-	if err != nil {
-		return "", false
-	}
-	end := len(b)
-	for end > 0 && b[end-1] == 0x00 {
-		end--
-	}
-	b = b[:end]
-	if len(b) == 0 {
-		return "", false
-	}
-	for _, c := range b {
-		if c < 32 || c > 126 {
-			return "", false
-		}
-	}
-	s := string(b)
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return "", false
-	}
-	return s, true
-}
-
-// isHexCurrency проверяет, является ли строка HEX валютой
-func isHexCurrency(cur string) bool {
-	// HEX валюта обычно 40 символов (20 байт в hex)
-	if len(cur) != 40 {
-		return false
-	}
-	// Проверяем, что все символы - это hex цифры
-	for _, c := range cur {
-		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
-			return false
-		}
-	}
-	return true
-}
-
-// currencyToSymbol конвертирует HEX валюту в символ, иначе возвращает как есть
-func currencyToSymbol(cur string) string {
-	if isHexCurrency(cur) {
-		if symbol, ok := decodeHexCurrency(cur); ok {
-			return symbol
-		}
-		return "" // Если не удалось декодировать
-	}
-	return strings.ToUpper(cur) // Обычная валюта как есть
-}
-
-// fixIssuerForXRP заменяет пустую строку issuer на "XRP" для XRP валюты
-func fixIssuerForXRP(currency, issuer string) string {
-	if currency == "XRP" && issuer == "" {
-		return "XRP"
-	}
-	return issuer
-}
-
-// generateVersion creates a timestamp-based version for ReplacingMergeTree deduplication
-func generateVersion() uint64 {
-	return uint64(time.Now().UnixNano())
-}
-
-func RunConsumer(conn *kafka.Reader, callback func(m kafka.Message)) {
-	ctx := context.Background()
-	for {
-		m, err := conn.FetchMessage(ctx)
-		if err != nil {
-			break
-		}
-		callback(m)
-
-		if err := conn.CommitMessages(ctx, m); err != nil {
-			logger.Log.Error().Err(err).Msg("Failed to commit kafka message")
-		}
-	}
-}
-
-func RunBulkConsumer(conn *kafka.Reader, callback func(<-chan kafka.Message)) {
-	ctx := context.Background()
-	ch := make(chan kafka.Message)
-	go callback(ch)
-
-	for {
-		m, err := conn.FetchMessage(ctx)
-		if err != nil {
-			break
-		}
-
-		ch <- m
-
-		if err := conn.CommitMessages(ctx, m); err != nil {
-			logger.Log.Error().Err(err).Msg("Failed to commit kafka message")
-		}
-	}
 }
 
 // ExtractBalanceChanges собирает реальные изменения балансов (XRP + IOU)
@@ -224,23 +49,8 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 
 	txAccount, _ := base["Account"].(string)
 	txDestination, _ := base["Destination"].(string)
-
-	// Парсим Fee, который может быть разных типов
-	txFee := decimal.Zero
-	switch v := base["Fee"].(type) {
-	case string:
-		txFee, _ = decimal.NewFromString(v)
-	case float64:
-		txFee = decimal.NewFromFloat(v)
-	case int64:
-		txFee = decimal.NewFromInt(v)
-	case int:
-		txFee = decimal.NewFromInt(int64(v))
-	case json.Number:
-		if f, err := v.Float64(); err == nil {
-			txFee = decimal.NewFromFloat(f)
-		}
-	}
+	txFeeStr, _ := base["Fee"].(string)
+	txFee, _ := decimal.NewFromString(txFeeStr)
 
 	// 🔹 1) Собираем все аккаунты с AMMID (исключаем их из балансов)
 	ammAccounts := map[string]bool{}
@@ -330,16 +140,14 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 
 				balFinal, _ := decimal.NewFromString(balFinalStr)
 				balPrev, _ := decimal.NewFromString(balPrevStr)
-				delta := normalizeAmount(balFinal.Sub(balPrev).Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP))))
+				delta := balFinal.Sub(balPrev).Div(decimal.NewFromInt(1_000_000))
 
 				if delta.IsZero() {
 					continue
 				}
 
 				kind := KindUnknown
-
-				// Определяем Fee по точному совпадению с суммой комиссии
-				if account == txAccount && delta.IsNegative() && delta.Abs().Equal(txFee.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP))).Abs()) {
+				if account == txAccount && delta.IsNegative() && delta.Abs().Equal(txFee.Div(decimal.NewFromInt(1_000_000)).Abs()) {
 					kind = KindFee
 				}
 
@@ -357,7 +165,7 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				if !ok1 || !ok2 {
 					continue
 				}
-				delta := normalizeAmount(balFinal.Sub(balPrev))
+				delta := balFinal.Sub(balPrev)
 				if delta.IsZero() {
 					continue
 				}
@@ -369,38 +177,24 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				currency, _ := highLimit["currency"].(string)
 				tokenIssuer := detectTokenIssuer(base, currency)
 
-				// Определяем burn операцию: если токены отправляются эмитенту
-				isBurn := false
-				if txDestination != "" && txDestination == tokenIssuer && delta.IsPositive() {
-					isBurn = true
-				}
-
 				// сторона High (баланс ведётся от лица HighIssuer)
 				if highIssuer != "" && highIssuer != tokenIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
-					kind := KindUnknown
-					if isBurn && highIssuer == txAccount {
-						kind = KindBurn
-					}
 					result = append(result, BalanceChange{
 						Account:  highIssuer,
 						Currency: currency,
 						Issuer:   lowIssuer,
 						Delta:    delta.Neg(),
-						Kind:     kind,
+						Kind:     KindUnknown,
 					})
 				}
 				// сторона Low
 				if lowIssuer != "" && lowIssuer != tokenIssuer && !ammAccounts[lowIssuer] && !(isSelfSwap && lowIssuer != txAccount) {
-					kind := KindUnknown
-					if isBurn && lowIssuer == txAccount {
-						kind = KindBurn
-					}
 					result = append(result, BalanceChange{
 						Account:  lowIssuer,
 						Currency: currency,
 						Issuer:   highIssuer,
 						Delta:    delta,
-						Kind:     kind,
+						Kind:     KindUnknown,
 					})
 				}
 			}
@@ -452,7 +246,47 @@ func extractDecimal(m map[string]interface{}, key string, innerKey string) (deci
 	if err != nil {
 		return decimal.Zero, false
 	}
-	return normalizeAmount(val), true
+	return val, true
+}
+
+// =========================
+// Grouping into Actions
+// =========================
+
+type ActionKind string
+
+const (
+	ActTransfer ActionKind = "Transfer"
+	ActSwap     ActionKind = "Swap"     // одно лицо: -X +Y
+	ActDexOffer ActionKind = "DexOffer" // одно лицо: -A +B (не отправитель/получатель)
+	ActFee      ActionKind = "Fee"      // -XRP комиссия
+	ActUnknown  ActionKind = "Unknown"
+)
+
+type Side struct {
+	Account  string
+	Currency string
+	Issuer   string
+	Amount   decimal.Decimal // + получено, - отправлено
+}
+
+type Action struct {
+	Kind  ActionKind
+	Sides []Side // 1..2 стороны (fee=1, swap/dexOffer=2, transfer=2)
+	Note  string // опционально, для отладки/вывода
+}
+
+var eps = decimal.NewFromFloat(1e-9)
+
+func sign(x decimal.Decimal) int {
+	switch {
+	case x.GreaterThan(eps):
+		return +1
+	case x.LessThan(eps.Neg()):
+		return -1
+	default:
+		return 0
+	}
 }
 
 // getDeliveredInfo: доставленная валюта/эмитент/значение (учитывает XRP как строку в дропах)
@@ -486,12 +320,12 @@ func getDeliveredInfo(tx map[string]interface{}) (currency, issuer string, value
 		// XRP case: может быть строкой-дропами
 		if s, oks := meta["delivered_amount"].(string); oks && s != "" {
 			if drops, err := decimal.NewFromString(s); err == nil {
-				return "XRP", "XRP", drops.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP))), false, true
+				return "XRP", "XRP", drops.Div(decimal.NewFromInt(1_000_000)), false, true
 			}
 		}
 		if s, oks := meta["DeliveredAmount"].(string); oks && s != "" {
 			if drops, err := decimal.NewFromString(s); err == nil {
-				return "XRP", "XRP", drops.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP))), false, true
+				return "XRP", "XRP", drops.Div(decimal.NewFromInt(1_000_000)), false, true
 			}
 		}
 	}
@@ -501,7 +335,7 @@ func getDeliveredInfo(tx map[string]interface{}) (currency, issuer string, value
 	case string: // XRP drops
 		if a != "" {
 			if drops, err := decimal.NewFromString(a); err == nil {
-				return "XRP", "XRP", drops.Div(decimal.NewFromInt(int64(models.DROPS_IN_XRP))), false, true
+				return "XRP", "XRP", drops.Div(decimal.NewFromInt(1_000_000)), false, true
 			}
 		}
 	case map[string]interface{}:
@@ -630,47 +464,13 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		}
 	}
 
-	// 2) Burn (явное)
-	for i := range changes {
-		if changes[i].Kind == KindBurn && !used[i] {
-			actions = append(actions, Action{
-				Kind: ActBurn,
-				Sides: []Side{{
-					Account:  changes[i].Account,
-					Currency: changes[i].Currency,
-					Issuer:   changes[i].Issuer,
-					Amount:   changes[i].Delta, // отрицательное (токены сжигаются)
-				}},
-				Note: "Burn",
-			})
-			used[i] = true
-		}
-	}
-
-	// 3) Liquidity (явное)
-	for i := range changes {
-		if changes[i].Kind == KindLiquidity && !used[i] {
-			actions = append(actions, Action{
-				Kind: ActLiquidity,
-				Sides: []Side{{
-					Account:  changes[i].Account,
-					Currency: "XRP",
-					Issuer:   "XRP",
-					Amount:   changes[i].Delta,
-				}},
-				Note: "Liquidity",
-			})
-			used[i] = true
-		}
-	}
-
-	// 4) Свап у отправителя (если есть -XRP и +IOU/XRP)
+	// 2) Свап у отправителя (если есть -XRP и +IOU/XRP)
 	if txAccount != "" {
 		acts := pairAccountActions(txAccount, changes, used, ActSwap)
 		actions = append(actions, acts...)
 	}
 
-	// 5) DexOffer у остальных (каждый аккаунт, кроме отправителя и получателя)
+	// 3) DexOffer у остальных (каждый аккаунт, кроме отправителя и получателя)
 	byAcct := collectByAccount(changes, used)
 	for acct := range byAcct {
 		if acct == txAccount || acct == txDestination {
@@ -680,7 +480,7 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		actions = append(actions, acts...)
 	}
 
-	// 6) Transfer: связать txAccount(оставшийся минус) -> txDestination(плюс delivered)
+	// 4) Transfer: связать txAccount(оставшийся минус) -> txDestination(плюс delivered)
 	delCur, delIss, delVal, _, hasDel := getDeliveredInfo(tx)
 
 	var destPosIdx = -1
@@ -753,13 +553,13 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		changes[destPosIdx].Kind = KindTransfer
 	}
 
-	// 6) Остатки — как Liquidity (редкие случаи, например, частичные/мульти-пары)
+	// 5) Остатки — как Unknown (редкие случаи, например, частичные/мульти-пары)
 	for i := range changes {
 		if used[i] {
 			continue
 		}
 		actions = append(actions, Action{
-			Kind: ActLiquidity,
+			Kind: ActUnknown,
 			Sides: []Side{{
 				Account:  changes[i].Account,
 				Currency: changes[i].Currency,
@@ -773,180 +573,88 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 	return actions
 }
 
-func RunConsumers() {
-	go RunBulkConsumer(connections.KafkaReaderTransaction, func(ch <-chan kafka.Message) {
-		ctx := context.Background()
-		for {
-			m := <-ch
-			var tx map[string]interface{}
-			if err := json.Unmarshal(m.Value, &tx); err != nil {
-				logger.Log.Error().Err(err).Msg("Transaction json.Unmarshal error")
-				continue
-			}
-			if tt, ok := tx["TransactionType"].(string); ok {
-				if tt != "Payment" {
-					continue
-				}
-			} else {
-				continue
-			}
+// =========================
+// Utils for printing
+// =========================
 
-			modified, err := indexer.ModifyTransaction(tx)
-			if err != nil {
-				logger.Log.Error().Err(err).Msg("Error fixing transaction object")
-				continue
-			}
-
-			var base map[string]interface{} = modified
-			hash, _ := base["hash"].(string)
-			ledgerIndex, _ := base["ledger_index"].(float64)
-			closeTime, _ := base["date"].(float64)
-			inLedgerIndex := float64(0)
-			if meta, ok := base["meta"].(map[string]interface{}); ok {
-				if r, ok := meta["TransactionResult"].(string); ok {
-					if r != "tesSUCCESS" {
-						continue
-					}
-				}
-				if ti, ok := meta["TransactionIndex"].(float64); ok {
-					inLedgerIndex = ti
-				}
-			}
-			feeDrops := uint64(0)
-			switch v := base["Fee"].(type) {
-			case float64:
-				feeDrops = uint64(v)
-			case int64:
-				feeDrops = uint64(v)
-			case int:
-				feeDrops = uint64(v)
-			case string:
-				if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
-					feeDrops = parsed
-				}
-			case json.Number:
-				if parsed, err := v.Int64(); err == nil {
-					feeDrops = uint64(parsed)
-				}
-			}
-
-			const rippleToUnix int64 = 946684800
-			closeTimeUnix := int64(closeTime) + rippleToUnix
-
-			// Используем новую логику для обработки транзакций
-			changes := ExtractBalanceChanges(base)
-			actions := BuildActionGroups(base, changes)
-
-			// Создаем записи для Kafka на основе действий
-			for _, action := range actions {
-				if len(action.Sides) == 0 {
-					continue
-				}
-
-				var fromSide, toSide Side
-				var kind string
-
-				switch action.Kind {
-				case ActFee:
-					// Fee - только одна сторона (отправитель теряет XRP)
-					fromSide = action.Sides[0]
-					toSide = Side{
-						Account:  "",
-						Currency: "XRP",
-						Issuer:   "XRP",
-						Amount:   decimal.Zero,
-					}
-					kind = "fee"
-				case ActBurn:
-					// Burn - только одна сторона (токены сжигаются)
-					fromSide = action.Sides[0]
-					toSide = Side{
-						Account:  "",
-						Currency: fromSide.Currency,
-						Issuer:   fromSide.Issuer,
-						Amount:   decimal.Zero,
-					}
-					kind = "burn"
-				case ActLiquidity:
-					// Liquidity - только одна сторона (вывод ликвидности)
-					fromSide = action.Sides[0]
-					toSide = Side{
-						Account:  "",
-						Currency: "XRP",
-						Issuer:   "XRP",
-						Amount:   decimal.Zero,
-					}
-					kind = "liquidity"
-				case ActSwap, ActDexOffer:
-					// Swap/DexOffer - две стороны у одного аккаунта
-					if len(action.Sides) >= 2 {
-						fromSide = action.Sides[0] // отрицательная сторона
-						toSide = action.Sides[1]   // положительная сторона
-						if action.Kind == ActSwap {
-							kind = "swap"
-						} else {
-							kind = "dexOffer"
-						}
-					} else {
-						continue
-					}
-				case ActTransfer:
-					// Transfer - две стороны между разными аккаунтами
-					if len(action.Sides) >= 2 {
-						fromSide = action.Sides[0] // отправитель
-						toSide = action.Sides[1]   // получатель
-						kind = "transfer"
-					} else {
-						continue
-					}
-				case ActUnknown:
-					// Unknown - одна сторона
-					fromSide = action.Sides[0]
-					toSide = Side{
-						Account:  "",
-						Currency: fromSide.Currency,
-						Issuer:   fromSide.Issuer,
-						Amount:   decimal.Zero,
-					}
-					kind = "unknown"
-				default:
-					continue
-				}
-
-				// Вычисляем курс для swap/dexOffer операций
-				var rate decimal.Decimal = decimal.Zero
-				if (action.Kind == ActSwap || action.Kind == ActDexOffer) && !toSide.Amount.IsZero() {
-					rate = fromSide.Amount.Abs().Div(toSide.Amount.Abs())
-				} else {
-					rate = decimal.NewFromInt(1) // Для transfer, fee, burn
-				}
-
-				// Создаем запись для Kafka
-				row := models.CHMoneyFlowRow{
-					TxHash:            hash,
-					LedgerIndex:       uint32(ledgerIndex),
-					InLedgerIndex:     uint32(inLedgerIndex),
-					CloseTimeUnix:     closeTimeUnix,
-					FeeDrops:          feeDrops,
-					FromAddress:       fromSide.Account,
-					ToAddress:         toSide.Account,
-					FromCurrency:      currencyToSymbol(fromSide.Currency),
-					FromIssuerAddress: fixIssuerForXRP(currencyToSymbol(fromSide.Currency), fromSide.Issuer),
-					ToCurrency:        currencyToSymbol(toSide.Currency),
-					ToIssuerAddress:   fixIssuerForXRP(currencyToSymbol(toSide.Currency), toSide.Issuer),
-					FromAmount:        fromSide.Amount.String(),
-					ToAmount:          toSide.Amount.String(),
-					InitFromAmount:    fromSide.Amount.Abs().String(),
-					InitToAmount:      toSide.Amount.Abs().String(),
-					Quote:             rate.String(),
-					Kind:              kind,
-					Version:           generateVersion(),
-				}
-
-				if rowData, err := json.Marshal(row); err == nil {
-					_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHMoneyFlows(), Key: []byte(hash), Value: rowData})
-				}
-			}
+func fmtAmt(s Side) string {
+	unit := s.Currency
+	if unit == "XRP" {
+		unit = "XRP"
+	} else {
+		// короткая форма HEX кода: первые 8 символов и эмитент в короткой нотации
+		if len(unit) > 8 {
+			unit = unit[:8] + "…"
 		}
-	})
+	}
+	iss := s.Issuer
+	if iss == "" {
+		iss = "-"
+	}
+	sign := "+"
+	if s.Amount.IsNegative() {
+		sign = "-"
+	}
+	return fmt.Sprintf("%s %.6f %s.%s",
+		sign, s.Amount.Abs().InexactFloat64(), unit, shortAddr(iss))
+}
+
+func shortAddr(a string) string {
+	if a == "" || a == "XRP" {
+		return a
+	}
+	if len(a) <= 6 {
+		return a
+	}
+	return a[:3] + "…" + a[len(a)-3:]
+}
+
+// =========================
+// Main
+// =========================
+func main() {
+	// поменяй путь при необходимости
+	data, err := os.ReadFile("../examples/tx_14.json")
+	if err != nil {
+		fmt.Println("Ошибка чтения файла:", err)
+		return
+	}
+
+	var tx map[string]interface{}
+	if err := json.Unmarshal(data, &tx); err != nil {
+		fmt.Println("Ошибка парсинга JSON:", err)
+		return
+	}
+
+	// 1) Плоские изменения
+	changes := ExtractBalanceChanges(tx)
+
+	// 2) Связки действий (помечают Kind у changes на Swap/DexOffer/Transfer/и т.д.)
+	actions := BuildActionGroups(tx, changes)
+
+	// 3) Печать изменений (уже с поставленными Kind)
+	fmt.Println("=== Изменения балансов ===")
+	for i, c := range changes {
+		sign := "+"
+		if c.Delta.IsNegative() {
+			sign = "-"
+		}
+		fmt.Printf("%2d. %-35s %6s %s %s%.6f   [%s]\n",
+			i+1, c.Account, c.Currency, c.Issuer, sign, c.Delta.Abs().InexactFloat64(), c.Kind)
+	}
+	fmt.Printf("Всего записей: %d\n", len(changes))
+
+	// 4) Печать связок действий
+	fmt.Println("\n=== Связки действий ===")
+	for i, a := range actions {
+		var sb []string
+		for _, s := range a.Sides {
+			sb = append(sb, fmt.Sprintf("%s: %s", shortAddr(s.Account), fmtAmt(s)))
+		}
+		note := a.Note
+		if note != "" {
+			note = "  // " + note
+		}
+		fmt.Printf("%2d) %-9s  %s%s\n", i+1, a.Kind, strings.Join(sb, " | "), note)
+	}
 }

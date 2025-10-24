@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS xrpl.money_flow
   init_from_amount Decimal(38, 18) CODEC(ZSTD(3)),
   init_to_amount Decimal(38, 18) CODEC(ZSTD(3)),
   quote Decimal(38, 18) CODEC(ZSTD(3)),
-  kind Enum8('transfer' = 0, 'dexOffer' = 1, 'swap' = 2),
+  kind Enum8('unknown' = 0, 'transfer' = 1, 'dexOffer' = 2, 'swap' = 3, 'fee' = 4, 'burn' = 5, 'liquidity' = 6),
   version UInt64 DEFAULT now64()
 )
 ENGINE = ReplacingMergeTree(version)
@@ -101,7 +101,12 @@ SELECT
   anyLast(CAST(JSONExtractString(value, 'init_from_amount'), 'Decimal(38,18)')) AS init_from_amount,
   anyLast(CAST(JSONExtractString(value, 'init_to_amount'), 'Decimal(38,18)')) AS init_to_amount,
   anyLast(CAST(JSONExtractString(value, 'quote'), 'Decimal(38,18)')) AS quote,
-  anyLast(CAST(JSONExtractString(value, 'kind'), 'Enum8(''transfer''=0,''dexOffer''=1,''swap''=2)')) AS kind,
+  anyLast(
+    CAST(
+      JSONExtractString(value, 'kind'),
+      'Enum8(''unknown''=0, ''transfer''=1, ''dexOffer''=2, ''swap''=3, ''fee''=4, ''burn''=5, ''liquidity''=6)'
+    )
+  ) AS kind,
   now64() AS version
 FROM xrpl.ch_moneyflows_kafka
 GROUP BY (
