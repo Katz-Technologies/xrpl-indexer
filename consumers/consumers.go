@@ -23,6 +23,8 @@ import (
 // Domain types (balances)
 // =========================
 
+const BLACKLIST_ACCOUNT_ROGUE = "rogue5HnPRSszD9CWGSUz8UGHMVwSSKF6"
+
 type ChangeKind string
 
 const (
@@ -32,6 +34,7 @@ const (
 	KindTransfer  ChangeKind = "Transfer"
 	KindBurn      ChangeKind = "Burn"
 	KindLiquidity ChangeKind = "Liquidity"
+	KindPayout    ChangeKind = "Payout"
 	KindUnknown   ChangeKind = "Unknown"
 )
 
@@ -45,8 +48,8 @@ type BalanceChange struct {
 
 var (
 	eps           = decimal.NewFromFloat(1e-9)
-	dustThreshold = decimal.NewFromFloat(1e-12) // всё меньше — считаем нулём
-	maxIOUValue   = decimal.NewFromFloat(1e20)  // всё больше — считаем мусором
+	dustThreshold = decimal.NewFromFloat(1e-18) // всё меньше — считаем нулём
+	maxIOUValue   = decimal.NewFromFloat(1e38)  // всё больше — считаем мусором
 )
 
 // normalizeAmount ограничивает диапазон и убирает "пыль" IOU-значений
@@ -77,6 +80,7 @@ const (
 	ActFee       ActionKind = "Fee"       // -XRP комиссия
 	ActBurn      ActionKind = "Burn"      // сжигание токенов (отправка эмитенту)
 	ActLiquidity ActionKind = "Liquidity" // вывод ликвидности (депозит в AMM)
+	ActPayout    ActionKind = "Payout"    // выдача токенов эмитентом пользователю
 	ActUnknown   ActionKind = "Unknown"
 )
 
@@ -301,6 +305,7 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 			continue
 		}
 
+		// Обработка ModifiedNode и DeletedNode
 		for _, nodeType := range []string{"ModifiedNode", "DeletedNode"} {
 			node, ok := nodeMap[nodeType].(map[string]interface{})
 			if !ok {
@@ -374,6 +379,12 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				if txDestination != "" && txDestination == tokenIssuer && delta.IsPositive() {
 					isBurn = true
 				}
+				
+				// Определяем выдачу: если эмитент отправляет токен пользователю
+				isPayout := false
+				if txAccount == tokenIssuer && delta.IsPositive() && txDestination != tokenIssuer {
+					isPayout = true
+				}
 
 				// сторона High (баланс ведётся от лица HighIssuer)
 				if highIssuer != "" && highIssuer != tokenIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
@@ -395,12 +406,89 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					if isBurn && lowIssuer == txAccount {
 						kind = KindBurn
 					}
+					if isPayout && lowIssuer == txDestination {
+						kind = KindPayout
+					}
 					result = append(result, BalanceChange{
 						Account:  lowIssuer,
 						Currency: currency,
 						Issuer:   highIssuer,
 						Delta:    delta,
 						Kind:     kind,
+					})
+				}
+			}
+		}
+
+		// Обработка CreatedNode (создание новых аккаунтов или trustlines)
+		if node, ok := nodeMap["CreatedNode"].(map[string]interface{}); ok {
+			ledgerType, _ := node["LedgerEntryType"].(string)
+			newFields, _ := node["NewFields"].(map[string]interface{})
+			if newFields == nil {
+				continue
+			}
+
+			switch ledgerType {
+
+			case "AccountRoot":
+				account, _ := newFields["Account"].(string)
+				balNewStr, _ := newFields["Balance"].(string)
+
+				if account == "" || balNewStr == "" {
+					continue
+				}
+				if ammAccounts[account] || (isSelfSwap && account != txAccount) {
+					continue
+				}
+
+				balNew, _ := decimal.NewFromString(balNewStr)
+				delta := normalizeAmount(balNew.Div(decimal.NewFromInt(1_000_000)))
+
+				if delta.IsZero() {
+					continue
+				}
+
+				// Новый аккаунт получает баланс (всегда положительный)
+				result = append(result, BalanceChange{
+					Account:  account,
+					Currency: "XRP",
+					Issuer:   "XRP",
+					Delta:    delta,
+					Kind:     KindUnknown,
+				})
+
+			case "RippleState":
+				// Создание trustline с начальным балансом
+				balNew, ok1 := extractDecimal(newFields, "Balance", "value")
+				if !ok1 || balNew.IsZero() {
+					continue
+				}
+
+				highLimit, _ := newFields["HighLimit"].(map[string]interface{})
+				lowLimit, _ := newFields["LowLimit"].(map[string]interface{})
+				highIssuer, _ := highLimit["issuer"].(string)
+				lowIssuer, _ := lowLimit["issuer"].(string)
+				currency, _ := highLimit["currency"].(string)
+				tokenIssuer := detectTokenIssuer(base, currency)
+
+				// сторона High
+				if highIssuer != "" && highIssuer != tokenIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
+					result = append(result, BalanceChange{
+						Account:  highIssuer,
+						Currency: currency,
+						Issuer:   lowIssuer,
+						Delta:    balNew.Neg(),
+						Kind:     KindUnknown,
+					})
+				}
+				// сторона Low
+				if lowIssuer != "" && lowIssuer != tokenIssuer && !ammAccounts[lowIssuer] && !(isSelfSwap && lowIssuer != txAccount) {
+					result = append(result, BalanceChange{
+						Account:  lowIssuer,
+						Currency: currency,
+						Issuer:   highIssuer,
+						Delta:    balNew,
+						Kind:     KindUnknown,
 					})
 				}
 			}
@@ -877,6 +965,14 @@ func RunConsumers() {
 						Amount:   decimal.Zero,
 					}
 					kind = "liquidity"
+				case ActPayout:
+					if len(action.Sides) >= 2 {
+						fromSide = action.Sides[0]
+						toSide = action.Sides[1]
+						kind = "payout"
+					} else {
+						continue
+					}
 				case ActSwap, ActDexOffer:
 					// Swap/DexOffer - две стороны у одного аккаунта
 					if len(action.Sides) >= 2 {
@@ -919,6 +1015,13 @@ func RunConsumers() {
 					rate = fromSide.Amount.Abs().Div(toSide.Amount.Abs())
 				} else {
 					rate = decimal.NewFromInt(1) // Для transfer, fee, burn
+				}
+
+				if fromSide.Account == BLACKLIST_ACCOUNT_ROGUE {
+					continue
+				}
+				if toSide.Account == BLACKLIST_ACCOUNT_ROGUE {
+					continue
 				}
 
 				// Создаем запись для Kafka
