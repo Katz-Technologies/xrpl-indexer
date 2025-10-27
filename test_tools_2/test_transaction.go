@@ -786,7 +786,7 @@ func shortAddr(a string) string {
 // =========================
 func main() {
 	// Обрабатываем файлы от tx_1.json до tx_14.json
-	for i := 23; i <= 23; i++ {
+	for i := 24; i <= 24; i++ {
 		filename := fmt.Sprintf("../examples/tx_%d.json", i)
 
 		fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")
