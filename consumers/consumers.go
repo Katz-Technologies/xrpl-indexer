@@ -946,11 +946,11 @@ func RunConsumers() {
 					}
 					kind = "burn"
 				case ActPayout:
-					fromSide = action.Sides[0]
-					toSide = Side{
+					toSide = action.Sides[0]
+					fromSide = Side{
 						Account:     "",
-						Currency:    fromSide.Currency,
-						Issuer:      fromSide.Issuer,
+						Currency:    toSide.Currency,
+						Issuer:      toSide.Issuer,
 						Amount:      decimal.Zero,
 						InitBalance: decimal.Zero,
 					}
