@@ -28,11 +28,12 @@ const (
 )
 
 type BalanceChange struct {
-	Account  string
-	Currency string
-	Issuer   string
-	Delta    decimal.Decimal
-	Kind     ChangeKind
+	Account     string
+	Currency    string
+	Issuer      string
+	Delta       decimal.Decimal
+	InitBalance decimal.Decimal // начальный баланс до изменения
+	Kind        ChangeKind
 }
 
 var (
@@ -193,12 +194,16 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					kind = KindFee
 				}
 
+				// Начальный баланс в XRP (до изменения)
+				initBalance := balPrev.Div(decimal.NewFromInt(1_000_000))
+
 				result = append(result, BalanceChange{
-					Account:  account,
-					Currency: "XRP",
-					Issuer:   "XRP",
-					Delta:    delta,
-					Kind:     kind,
+					Account:     account,
+					Currency:    "XRP",
+					Issuer:      "XRP",
+					Delta:       delta,
+					InitBalance: initBalance,
+					Kind:        kind,
 				})
 
 			case "RippleState":
@@ -249,12 +254,15 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					if isPayout && highIssuer == txDestination {
 						kind = KindPayout
 					}
+					// Начальный баланс для HighSide: -balPrev (баланс инвертирован)
+					initBalanceHigh := balPrev.Neg()
 					result = append(result, BalanceChange{
-						Account:  highIssuer,
-						Currency: currency,
-						Issuer:   realIssuer,
-						Delta:    delta.Neg(),
-						Kind:     kind,
+						Account:     highIssuer,
+						Currency:    currency,
+						Issuer:      realIssuer,
+						Delta:       delta.Neg(),
+						InitBalance: initBalanceHigh,
+						Kind:        kind,
 					})
 				}
 				// сторона Low
@@ -267,12 +275,15 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					if isPayout && lowIssuer == txDestination {
 						kind = KindPayout
 					}
+					// Начальный баланс для LowSide: balPrev
+					initBalanceLow := balPrev
 					result = append(result, BalanceChange{
-						Account:  lowIssuer,
-						Currency: currency,
-						Issuer:   realIssuer,
-						Delta:    delta,
-						Kind:     kind,
+						Account:     lowIssuer,
+						Currency:    currency,
+						Issuer:      realIssuer,
+						Delta:       delta,
+						InitBalance: initBalanceLow,
+						Kind:        kind,
 					})
 				}
 			}
@@ -307,12 +318,14 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				}
 
 				// Новый аккаунт получает баланс (всегда положительный)
+				// Начальный баланс = 0 (это новый аккаунт)
 				result = append(result, BalanceChange{
-					Account:  account,
-					Currency: "XRP",
-					Issuer:   "XRP",
-					Delta:    delta,
-					Kind:     KindUnknown,
+					Account:     account,
+					Currency:    "XRP",
+					Issuer:      "XRP",
+					Delta:       delta,
+					InitBalance: decimal.Zero,
+					Kind:        KindUnknown,
 				})
 
 			case "RippleState":
@@ -335,23 +348,27 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				// сторона High
 				// Не показываем изменения самого эмитента (у которого value = 0)
 				if highIssuer != "" && highIssuer != realIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
+					// Для новой trustline начальный баланс = 0
 					result = append(result, BalanceChange{
-						Account:  highIssuer,
-						Currency: currency,
-						Issuer:   realIssuer,
-						Delta:    balNew.Neg(),
-						Kind:     KindUnknown,
+						Account:     highIssuer,
+						Currency:    currency,
+						Issuer:      realIssuer,
+						Delta:       balNew.Neg(),
+						InitBalance: decimal.Zero,
+						Kind:        KindUnknown,
 					})
 				}
 				// сторона Low
 				// Не показываем изменения самого эмитента (у которого value = 0)
 				if lowIssuer != "" && lowIssuer != realIssuer && !ammAccounts[lowIssuer] && !(isSelfSwap && lowIssuer != txAccount) {
+					// Для новой trustline начальный баланс = 0
 					result = append(result, BalanceChange{
-						Account:  lowIssuer,
-						Currency: currency,
-						Issuer:   realIssuer,
-						Delta:    balNew,
-						Kind:     KindUnknown,
+						Account:     lowIssuer,
+						Currency:    currency,
+						Issuer:      realIssuer,
+						Delta:       balNew,
+						InitBalance: decimal.Zero,
+						Kind:        KindUnknown,
 					})
 				}
 			}
@@ -490,10 +507,11 @@ const (
 )
 
 type Side struct {
-	Account  string
-	Currency string
-	Issuer   string
-	Amount   decimal.Decimal // + получено, - отправлено
+	Account     string
+	Currency    string
+	Issuer      string
+	Amount      decimal.Decimal // + получено, - отправлено
+	InitBalance decimal.Decimal // начальный баланс до операции
 }
 
 type Action struct {
@@ -633,16 +651,18 @@ func pairAccountActions(
 			Kind: actionKind,
 			Sides: []Side{
 				{
-					Account:  account,
-					Currency: changes[in].Currency,
-					Issuer:   changes[in].Issuer,
-					Amount:   changes[in].Delta, // минус
+					Account:     account,
+					Currency:    changes[in].Currency,
+					Issuer:      changes[in].Issuer,
+					Amount:      changes[in].Delta, // минус
+					InitBalance: changes[in].InitBalance,
 				},
 				{
-					Account:  account,
-					Currency: changes[ip].Currency,
-					Issuer:   changes[ip].Issuer,
-					Amount:   changes[ip].Delta, // плюс
+					Account:     account,
+					Currency:    changes[ip].Currency,
+					Issuer:      changes[ip].Issuer,
+					Amount:      changes[ip].Delta, // плюс
+					InitBalance: changes[ip].InitBalance,
 				},
 			},
 			Note: fmt.Sprintf("%s pair for %s", actionKind, account),
@@ -677,10 +697,11 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 			actions = append(actions, Action{
 				Kind: ActFee,
 				Sides: []Side{{
-					Account:  changes[i].Account,
-					Currency: "XRP",
-					Issuer:   "XRP",
-					Amount:   changes[i].Delta, // отрицательное
+					Account:     changes[i].Account,
+					Currency:    "XRP",
+					Issuer:      "XRP",
+					Amount:      changes[i].Delta, // отрицательное
+					InitBalance: changes[i].InitBalance,
 				}},
 				Note: "Fee",
 			})
@@ -694,10 +715,11 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 			actions = append(actions, Action{
 				Kind: ActBurn,
 				Sides: []Side{{
-					Account:  changes[i].Account,
-					Currency: changes[i].Currency,
-					Issuer:   changes[i].Issuer,
-					Amount:   changes[i].Delta, // отрицательное (токены сжигаются)
+					Account:     changes[i].Account,
+					Currency:    changes[i].Currency,
+					Issuer:      changes[i].Issuer,
+					Amount:      changes[i].Delta, // отрицательное (токены сжигаются)
+					InitBalance: changes[i].InitBalance,
 				}},
 				Note: "Burn",
 			})
@@ -711,10 +733,11 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 			actions = append(actions, Action{
 				Kind: ActPayout,
 				Sides: []Side{{
-					Account:  changes[i].Account,
-					Currency: changes[i].Currency,
-					Issuer:   changes[i].Issuer,
-					Amount:   changes[i].Delta,
+					Account:     changes[i].Account,
+					Currency:    changes[i].Currency,
+					Issuer:      changes[i].Issuer,
+					Amount:      changes[i].Delta,
+					InitBalance: changes[i].InitBalance,
 				}},
 				Note: "Payout",
 			})
@@ -728,10 +751,11 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 			actions = append(actions, Action{
 				Kind: ActLoss,
 				Sides: []Side{{
-					Account:  changes[i].Account,
-					Currency: "XRP",
-					Issuer:   "XRP",
-					Amount:   changes[i].Delta,
+					Account:     changes[i].Account,
+					Currency:    "XRP",
+					Issuer:      "XRP",
+					Amount:      changes[i].Delta,
+					InitBalance: changes[i].InitBalance,
 				}},
 				Note: "Loss",
 			})
@@ -807,16 +831,18 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 			Kind: ActTransfer,
 			Sides: []Side{
 				{
-					Account:  changes[senderNegIdx].Account,
-					Currency: changes[senderNegIdx].Currency,
-					Issuer:   changes[senderNegIdx].Issuer,
-					Amount:   changes[senderNegIdx].Delta, // -
+					Account:     changes[senderNegIdx].Account,
+					Currency:    changes[senderNegIdx].Currency,
+					Issuer:      changes[senderNegIdx].Issuer,
+					Amount:      changes[senderNegIdx].Delta, // -
+					InitBalance: changes[senderNegIdx].InitBalance,
 				},
 				{
-					Account:  changes[destPosIdx].Account,
-					Currency: changes[destPosIdx].Currency,
-					Issuer:   changes[destPosIdx].Issuer,
-					Amount:   changes[destPosIdx].Delta, // +
+					Account:     changes[destPosIdx].Account,
+					Currency:    changes[destPosIdx].Currency,
+					Issuer:      changes[destPosIdx].Issuer,
+					Amount:      changes[destPosIdx].Delta, // +
+					InitBalance: changes[destPosIdx].InitBalance,
 				},
 			},
 			Note: "Transfer (sender->destination, possibly cross-currency)",
@@ -836,10 +862,11 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		actions = append(actions, Action{
 			Kind: ActLoss,
 			Sides: []Side{{
-				Account:  changes[i].Account,
-				Currency: changes[i].Currency,
-				Issuer:   changes[i].Issuer,
-				Amount:   changes[i].Delta,
+				Account:     changes[i].Account,
+				Currency:    changes[i].Currency,
+				Issuer:      changes[i].Issuer,
+				Amount:      changes[i].Delta,
+				InitBalance: changes[i].InitBalance,
 			}},
 			Note: "Loss (unpaired residue)",
 		})
@@ -920,8 +947,8 @@ func fmtAmt(s Side) string {
 	if s.Amount.IsNegative() {
 		sign = "-"
 	}
-	return fmt.Sprintf("%s %.6f %s.%s",
-		sign, s.Amount.Abs().InexactFloat64(), unit, iss)
+	return fmt.Sprintf("%s %.6f %s.%s (init: %.6f)",
+		sign, s.Amount.Abs().InexactFloat64(), unit, iss, s.InitBalance.InexactFloat64())
 }
 
 func shortAddr(a string) string {
@@ -939,7 +966,7 @@ func shortAddr(a string) string {
 // =========================
 func main() {
 	// Обрабатываем файлы от tx_1.json до tx_14.json
-	for i := 12; i <= 12; i++ {
+	for i := 13; i <= 24; i++ {
 		filename := fmt.Sprintf("../examples/tx_%d.json", i)
 
 		fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")
@@ -972,8 +999,9 @@ func main() {
 				sign = "-"
 			}
 			currencyReadable := decodeCurrency(c.Currency)
-			fmt.Printf("%2d. %-35s %6s %s %s%.6f   [%s]\n",
-				j+1, c.Account, currencyReadable, c.Issuer, sign, c.Delta.Abs().InexactFloat64(), c.Kind)
+			fmt.Printf("%2d. %-35s %6s %s %s%.6f (init: %.6f)  [%s]\n",
+				j+1, c.Account, currencyReadable, c.Issuer, sign, c.Delta.Abs().InexactFloat64(),
+				c.InitBalance.InexactFloat64(), c.Kind)
 		}
 		fmt.Printf("Всего записей: %d\n", len(changes))
 
