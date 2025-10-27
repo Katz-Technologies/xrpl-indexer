@@ -17,14 +17,14 @@ import (
 type ChangeKind string
 
 const (
-	KindFee       ChangeKind = "Fee"
-	KindSwap      ChangeKind = "Swap"
-	KindDexOffer  ChangeKind = "DexOffer"
-	KindTransfer  ChangeKind = "Transfer"
-	KindBurn      ChangeKind = "Burn"
-	KindLiquidity ChangeKind = "Liquidity"
-	KindPayout    ChangeKind = "Payout"
-	KindUnknown   ChangeKind = "Unknown"
+	KindFee      ChangeKind = "Fee"
+	KindSwap     ChangeKind = "Swap"
+	KindDexOffer ChangeKind = "DexOffer"
+	KindTransfer ChangeKind = "Transfer"
+	KindBurn     ChangeKind = "Burn"
+	KindLoss     ChangeKind = "Loss"
+	KindPayout   ChangeKind = "Payout"
+	KindUnknown  ChangeKind = "Unknown"
 )
 
 type BalanceChange struct {
@@ -219,7 +219,8 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				currency, _ := highLimit["currency"].(string)
 
 				// Определяем реального issuer токена из этой конкретной RippleState: тот, у кого value = 0
-				realIssuer := determineRealIssuer(highLimit, lowLimit, highIssuer, lowIssuer)
+				// Если оба = 0, то смотрим на знак баланса
+				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, balFinal)
 
 				// Определяем burn операцию: если токены отправляются эмитенту
 				isBurn := false
@@ -328,7 +329,8 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				currency, _ := highLimit["currency"].(string)
 
 				// Определяем реального issuer токена из этой конкретной RippleState: тот, у кого value = 0
-				realIssuer := determineRealIssuer(highLimit, lowLimit, highIssuer, lowIssuer)
+				// Если оба = 0, то смотрим на знак баланса
+				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, balNew)
 
 				// сторона High
 				// Не показываем изменения самого эмитента (у которого value = 0)
@@ -362,21 +364,67 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 // determineRealIssuer определяет реального эмитента токена из RippleState
 // Issuer - это тот аккаунт, у которого в HighLimit или LowLimit value = 0
 func determineRealIssuer(highLimit, lowLimit map[string]interface{}, highIssuer, lowIssuer string) string {
-	// Проверяем HighLimit
-	if highValue, ok := highLimit["value"].(string); ok {
-		if highValue == "0" {
+	highValue, highOk := highLimit["value"].(string)
+	lowValue, lowOk := lowLimit["value"].(string)
+
+	highIsZero := highOk && highValue == "0"
+	lowIsZero := lowOk && lowValue == "0"
+
+	// Случай 1: Только HighLimit = 0 → HighSide issuer
+	if highIsZero && !lowIsZero {
+		return highIssuer
+	}
+
+	// Случай 2: Только LowLimit = 0 → LowSide issuer
+	if lowIsZero && !highIsZero {
+		return lowIssuer
+	}
+
+	// Случай 3: Оба = 0 (trustline между двумя issuer'ами)
+	// Смотрим на знак баланса
+	if highIsZero && lowIsZero {
+		// Нужен баланс из FinalFields или NewFields
+		// Эту функцию вызывают с final/newFields, поэтому баланс должен быть доступен
+		// через переданный контекст. Но т.к. мы передаем только limit'ы,
+		// нужно передать баланс отдельно
+		return "" // Вернем пустую строку, обработаем выше
+	}
+
+	// Если не нашли, возвращаем пустую строку
+	return ""
+}
+
+// determineRealIssuerWithBalance определяет issuer с учетом баланса (для случая оба limit = 0)
+func determineRealIssuerWithBalance(highLimit, lowLimit map[string]interface{}, highIssuer, lowIssuer string, balance decimal.Decimal) string {
+	highValue, highOk := highLimit["value"].(string)
+	lowValue, lowOk := lowLimit["value"].(string)
+
+	highIsZero := highOk && highValue == "0"
+	lowIsZero := lowOk && lowValue == "0"
+
+	// Случай 1: Только HighLimit = 0 → HighSide issuer
+	if highIsZero && !lowIsZero {
+		return highIssuer
+	}
+
+	// Случай 2: Только LowLimit = 0 → LowSide issuer
+	if lowIsZero && !highIsZero {
+		return lowIssuer
+	}
+
+	// Случай 3: Оба = 0 (trustline между двумя issuer'ами)
+	// Баланс ведется от лица HighSide:
+	// - Balance отрицательный: HighSide должен LowSide → Issuer = LowSide
+	// - Balance положительный: LowSide должен HighSide → Issuer = HighSide
+	if highIsZero && lowIsZero {
+		if balance.IsNegative() {
+			return lowIssuer
+		} else {
 			return highIssuer
 		}
 	}
 
-	// Проверяем LowLimit
-	if lowValue, ok := lowLimit["value"].(string); ok {
-		if lowValue == "0" {
-			return lowIssuer
-		}
-	}
-
-	// Если не нашли, возвращаем пустую строку (не должно происходить в нормальных условиях)
+	// Если не нашли, возвращаем пустую строку
 	return ""
 }
 
@@ -432,13 +480,13 @@ func extractDecimal(m map[string]interface{}, key string, innerKey string) (deci
 type ActionKind string
 
 const (
-	ActTransfer  ActionKind = "Transfer"
-	ActSwap      ActionKind = "Swap"      // одно лицо: -X +Y
-	ActDexOffer  ActionKind = "DexOffer"  // одно лицо: -A +B (не отправитель/получатель)
-	ActFee       ActionKind = "Fee"       // -XRP комиссия
-	ActBurn      ActionKind = "Burn"      // сжигание токенов (отправка эмитенту)
-	ActPayout    ActionKind = "Payout"    // выплата токенов эмитентом
-	ActLiquidity ActionKind = "Liquidity" // вывод ликвидности (депозит в AMM)
+	ActTransfer ActionKind = "Transfer"
+	ActSwap     ActionKind = "Swap"     // одно лицо: -X +Y
+	ActDexOffer ActionKind = "DexOffer" // одно лицо: -A +B (не отправитель/получатель)
+	ActFee      ActionKind = "Fee"      // -XRP комиссия
+	ActBurn     ActionKind = "Burn"     // сжигание токенов (отправка эмитенту)
+	ActPayout   ActionKind = "Payout"   // выплата токенов эмитентом
+	ActLoss     ActionKind = "Loss"     // Потеря токенов
 )
 
 type Side struct {
@@ -674,18 +722,18 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		}
 	}
 
-	// 4) Liquidity (явное)
+	// 4) Loss (явное)
 	for i := range changes {
-		if changes[i].Kind == KindLiquidity && !used[i] {
+		if changes[i].Kind == KindLoss && !used[i] {
 			actions = append(actions, Action{
-				Kind: ActLiquidity,
+				Kind: ActLoss,
 				Sides: []Side{{
 					Account:  changes[i].Account,
 					Currency: "XRP",
 					Issuer:   "XRP",
 					Amount:   changes[i].Delta,
 				}},
-				Note: "Liquidity",
+				Note: "Loss",
 			})
 			used[i] = true
 		}
@@ -786,14 +834,14 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 			continue
 		}
 		actions = append(actions, Action{
-			Kind: ActLiquidity,
+			Kind: ActLoss,
 			Sides: []Side{{
 				Account:  changes[i].Account,
 				Currency: changes[i].Currency,
 				Issuer:   changes[i].Issuer,
 				Amount:   changes[i].Delta,
 			}},
-			Note: "Unpaired residue",
+			Note: "Loss (unpaired residue)",
 		})
 	}
 
@@ -891,7 +939,7 @@ func shortAddr(a string) string {
 // =========================
 func main() {
 	// Обрабатываем файлы от tx_1.json до tx_14.json
-	for i := 23; i <= 23; i++ {
+	for i := 12; i <= 12; i++ {
 		filename := fmt.Sprintf("../examples/tx_%d.json", i)
 
 		fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")
