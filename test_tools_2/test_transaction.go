@@ -224,11 +224,16 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				if txDestination != "" && txDestination == tokenIssuer && delta.IsPositive() {
 					isBurn = true
 				}
-				
+
 				// Определяем выдачу: если эмитент отправляет токен пользователю
 				isPayout := false
-				if txAccount == tokenIssuer && delta.IsPositive() && txDestination != tokenIssuer {
-					isPayout = true
+				if txAccount == tokenIssuer && txDestination != tokenIssuer {
+					// Для High: delta отрицательное = получатель получает токены (balance уменьшается в отрицательную сторону)
+					// Для Low: delta положительное = получатель получает токены (balance увеличивается)
+					if (highIssuer == txDestination && delta.IsNegative()) ||
+						(lowIssuer == txDestination && delta.IsPositive()) {
+						isPayout = true
+					}
 				}
 
 				// сторона High (баланс ведётся от лица HighIssuer)
@@ -236,6 +241,9 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					kind := KindUnknown
 					if isBurn && highIssuer == txAccount {
 						kind = KindBurn
+					}
+					if isPayout && highIssuer == txDestination {
+						kind = KindPayout
 					}
 					result = append(result, BalanceChange{
 						Account:  highIssuer,
@@ -400,6 +408,7 @@ const (
 	ActDexOffer  ActionKind = "DexOffer"  // одно лицо: -A +B (не отправитель/получатель)
 	ActFee       ActionKind = "Fee"       // -XRP комиссия
 	ActBurn      ActionKind = "Burn"      // сжигание токенов (отправка эмитенту)
+	ActPayout    ActionKind = "Payout"    // выплата токенов эмитентом
 	ActLiquidity ActionKind = "Liquidity" // вывод ликвидности (депозит в AMM)
 )
 
@@ -619,7 +628,24 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		}
 	}
 
-	// 3) Liquidity (явное)
+	// 3) Payout (явное)
+	for i := range changes {
+		if changes[i].Kind == KindPayout && !used[i] {
+			actions = append(actions, Action{
+				Kind: ActPayout,
+				Sides: []Side{{
+					Account:  changes[i].Account,
+					Currency: changes[i].Currency,
+					Issuer:   changes[i].Issuer,
+					Amount:   changes[i].Delta,
+				}},
+				Note: "Payout",
+			})
+			used[i] = true
+		}
+	}
+
+	// 4) Liquidity (явное)
 	for i := range changes {
 		if changes[i].Kind == KindLiquidity && !used[i] {
 			actions = append(actions, Action{
@@ -636,13 +662,13 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		}
 	}
 
-	// 4) Свап у отправителя (если есть -XRP и +IOU/XRP)
+	// 5) Свап у отправителя (если есть -XRP и +IOU/XRP)
 	if txAccount != "" {
 		acts := pairAccountActions(txAccount, changes, used, ActSwap)
 		actions = append(actions, acts...)
 	}
 
-	// 5) DexOffer у остальных (каждый аккаунт, кроме отправителя и получателя)
+	// 6) DexOffer у остальных (каждый аккаунт, кроме отправителя и получателя)
 	byAcct := collectByAccount(changes, used)
 	for acct := range byAcct {
 		if acct == txAccount || acct == txDestination {
@@ -652,7 +678,7 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		actions = append(actions, acts...)
 	}
 
-	// 6) Transfer: связать txAccount(оставшийся минус) -> txDestination(плюс delivered)
+	// 7) Transfer: связать txAccount(оставшийся минус) -> txDestination(плюс delivered)
 	delCur, delIss, delVal, _, hasDel := getDeliveredInfo(tx)
 
 	var destPosIdx = -1
@@ -725,7 +751,7 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		changes[destPosIdx].Kind = KindTransfer
 	}
 
-	// 6) Остатки — как Unknown (редкие случаи, например, частичные/мульти-пары)
+	// 8) Остатки — как Unknown (редкие случаи, например, частичные/мульти-пары)
 	for i := range changes {
 		if used[i] {
 			continue
@@ -751,14 +777,6 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 
 func fmtAmt(s Side) string {
 	unit := s.Currency
-	if unit == "XRP" {
-		unit = "XRP"
-	} else {
-		// короткая форма HEX кода: первые 8 символов и эмитент в короткой нотации
-		if len(unit) > 8 {
-			unit = unit[:8] + "…"
-		}
-	}
 	iss := s.Issuer
 	if iss == "" {
 		iss = "-"
@@ -768,7 +786,7 @@ func fmtAmt(s Side) string {
 		sign = "-"
 	}
 	return fmt.Sprintf("%s %.6f %s.%s",
-		sign, s.Amount.Abs().InexactFloat64(), unit, shortAddr(iss))
+		sign, s.Amount.Abs().InexactFloat64(), unit, iss)
 }
 
 func shortAddr(a string) string {
@@ -786,7 +804,7 @@ func shortAddr(a string) string {
 // =========================
 func main() {
 	// Обрабатываем файлы от tx_1.json до tx_14.json
-	for i := 24; i <= 24; i++ {
+	for i := 23; i <= 23; i++ {
 		filename := fmt.Sprintf("../examples/tx_%d.json", i)
 
 		fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")
@@ -828,7 +846,7 @@ func main() {
 		for j, a := range actions {
 			var sb []string
 			for _, s := range a.Sides {
-				sb = append(sb, fmt.Sprintf("%s: %s", shortAddr(s.Account), fmtAmt(s)))
+				sb = append(sb, fmt.Sprintf("%s: %s", s.Account, fmtAmt(s)))
 			}
 			note := a.Note
 			if note != "" {

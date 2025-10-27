@@ -200,10 +200,7 @@
           },
           "LedgerEntryType": "AccountRoot",
           "LedgerIndex": "34370BABA0A4A43B5190FF8574A8E9178F8E1C4A0DB0C4E6584E9E4AB6F01635",
-          "PreviousFields": {
-            "Balance": "116747497",
-            "OwnerCount": 4
-          },
+          "PreviousFields": { "Balance": "116747497", "OwnerCount": 4 },
           "PreviousTxnID": "F58B34D1FFACE9B4DA8001A590D313C925E05A2CFA13FA006C633191189B6FB8",
           "PreviousTxnLgrSeq": 98900159
         }
@@ -254,9 +251,7 @@
           },
           "LedgerEntryType": "AccountRoot",
           "LedgerIndex": "6BC9286C5146B76D0D140873B509D72581AABEB79037BF1D9849830FBF5A9FE6",
-          "PreviousFields": {
-            "Balance": "262586752074"
-          },
+          "PreviousFields": { "Balance": "262586752074" },
           "PreviousTxnID": "F0460D84D5B3D70CE2C99D85F05C6D0E15C20F7E379D13D1665B610A5B8D5E6A",
           "PreviousTxnLgrSeq": 98900159
         }
@@ -321,9 +316,7 @@
           },
           "LedgerEntryType": "AccountRoot",
           "LedgerIndex": "7FC536D41CB9DF1C0DADC2445DC37FE0C2CCA1012000552D1A681DA3DFAA9112",
-          "PreviousFields": {
-            "OwnerCount": 4
-          },
+          "PreviousFields": { "OwnerCount": 4 },
           "PreviousTxnID": "EE77AE635161114F5450C63E76B8073A10E1365A471C707CDB334BB8AE42D953",
           "PreviousTxnLgrSeq": 98900057
         }
@@ -447,10 +440,7 @@
           },
           "LedgerEntryType": "AccountRoot",
           "LedgerIndex": "AD996246DB541B3C05888AD98A17A2E32EC751E6512A476C9CA119D952642E63",
-          "PreviousFields": {
-            "Balance": "1678150183",
-            "Sequence": 95421099
-          },
+          "PreviousFields": { "Balance": "1678150183", "Sequence": 95421099 },
           "PreviousTxnID": "6A7EB7EB49C2F159629068F2D04E75C125195E0BF10F6290B7C5B7E7A32A7500",
           "PreviousTxnLgrSeq": 98900156
         }
@@ -671,9 +661,7 @@
           },
           "LedgerEntryType": "AccountRoot",
           "LedgerIndex": "F163DD507E62298F2DE2B380D065FD4BAE1FEC3A4482FB27DCA85876467029E3",
-          "PreviousFields": {
-            "OwnerCount": 3
-          },
+          "PreviousFields": { "OwnerCount": 3 },
           "PreviousTxnID": "8170F137C6F15045208F1CB0D9571C6B65998B5B91FBFEE54ACC15DF785F3D09",
           "PreviousTxnLgrSeq": 98900117
         }
