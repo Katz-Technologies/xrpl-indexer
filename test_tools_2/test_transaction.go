@@ -217,17 +217,19 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				highIssuer, _ := highLimit["issuer"].(string)
 				lowIssuer, _ := lowLimit["issuer"].(string)
 				currency, _ := highLimit["currency"].(string)
-				tokenIssuer := detectTokenIssuer(base, currency)
+
+				// Определяем реального issuer токена из этой конкретной RippleState: тот, у кого value = 0
+				realIssuer := determineRealIssuer(highLimit, lowLimit, highIssuer, lowIssuer)
 
 				// Определяем burn операцию: если токены отправляются эмитенту
 				isBurn := false
-				if txDestination != "" && txDestination == tokenIssuer && delta.IsPositive() {
+				if txDestination != "" && txDestination == realIssuer && delta.IsPositive() {
 					isBurn = true
 				}
 
 				// Определяем выдачу: если эмитент отправляет токен пользователю
 				isPayout := false
-				if txAccount == tokenIssuer && txDestination != tokenIssuer {
+				if txAccount == realIssuer && txDestination != realIssuer {
 					// Для High: delta отрицательное = получатель получает токены (balance уменьшается в отрицательную сторону)
 					// Для Low: delta положительное = получатель получает токены (balance увеличивается)
 					if (highIssuer == txDestination && delta.IsNegative()) ||
@@ -237,7 +239,8 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				}
 
 				// сторона High (баланс ведётся от лица HighIssuer)
-				if highIssuer != "" && highIssuer != tokenIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
+				// Не показываем изменения самого эмитента (у которого value = 0)
+				if highIssuer != "" && highIssuer != realIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
 					kind := KindUnknown
 					if isBurn && highIssuer == txAccount {
 						kind = KindBurn
@@ -248,13 +251,14 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					result = append(result, BalanceChange{
 						Account:  highIssuer,
 						Currency: currency,
-						Issuer:   lowIssuer,
+						Issuer:   realIssuer,
 						Delta:    delta.Neg(),
 						Kind:     kind,
 					})
 				}
 				// сторона Low
-				if lowIssuer != "" && lowIssuer != tokenIssuer && !ammAccounts[lowIssuer] && !(isSelfSwap && lowIssuer != txAccount) {
+				// Не показываем изменения самого эмитента (у которого value = 0)
+				if lowIssuer != "" && lowIssuer != realIssuer && !ammAccounts[lowIssuer] && !(isSelfSwap && lowIssuer != txAccount) {
 					kind := KindUnknown
 					if isBurn && lowIssuer == txAccount {
 						kind = KindBurn
@@ -265,7 +269,7 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					result = append(result, BalanceChange{
 						Account:  lowIssuer,
 						Currency: currency,
-						Issuer:   highIssuer,
+						Issuer:   realIssuer,
 						Delta:    delta,
 						Kind:     kind,
 					})
@@ -322,24 +326,28 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				highIssuer, _ := highLimit["issuer"].(string)
 				lowIssuer, _ := lowLimit["issuer"].(string)
 				currency, _ := highLimit["currency"].(string)
-				tokenIssuer := detectTokenIssuer(base, currency)
+
+				// Определяем реального issuer токена из этой конкретной RippleState: тот, у кого value = 0
+				realIssuer := determineRealIssuer(highLimit, lowLimit, highIssuer, lowIssuer)
 
 				// сторона High
-				if highIssuer != "" && highIssuer != tokenIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
+				// Не показываем изменения самого эмитента (у которого value = 0)
+				if highIssuer != "" && highIssuer != realIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
 					result = append(result, BalanceChange{
 						Account:  highIssuer,
 						Currency: currency,
-						Issuer:   lowIssuer,
+						Issuer:   realIssuer,
 						Delta:    balNew.Neg(),
 						Kind:     KindUnknown,
 					})
 				}
 				// сторона Low
-				if lowIssuer != "" && lowIssuer != tokenIssuer && !ammAccounts[lowIssuer] && !(isSelfSwap && lowIssuer != txAccount) {
+				// Не показываем изменения самого эмитента (у которого value = 0)
+				if lowIssuer != "" && lowIssuer != realIssuer && !ammAccounts[lowIssuer] && !(isSelfSwap && lowIssuer != txAccount) {
 					result = append(result, BalanceChange{
 						Account:  lowIssuer,
 						Currency: currency,
-						Issuer:   highIssuer,
+						Issuer:   realIssuer,
 						Delta:    balNew,
 						Kind:     KindUnknown,
 					})
@@ -349,6 +357,27 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 	}
 
 	return result
+}
+
+// determineRealIssuer определяет реального эмитента токена из RippleState
+// Issuer - это тот аккаунт, у которого в HighLimit или LowLimit value = 0
+func determineRealIssuer(highLimit, lowLimit map[string]interface{}, highIssuer, lowIssuer string) string {
+	// Проверяем HighLimit
+	if highValue, ok := highLimit["value"].(string); ok {
+		if highValue == "0" {
+			return highIssuer
+		}
+	}
+
+	// Проверяем LowLimit
+	if lowValue, ok := lowLimit["value"].(string); ok {
+		if lowValue == "0" {
+			return lowIssuer
+		}
+	}
+
+	// Если не нашли, возвращаем пустую строку (не должно происходить в нормальных условиях)
+	return ""
 }
 
 // detectTokenIssuer определяет эмитента токена из полей Amount / SendMax / DeliveredAmount
@@ -775,8 +804,66 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 // Utils for printing
 // =========================
 
+// decodeCurrency декодирует hex-представление валюты в читаемый вид
+func decodeCurrency(currency string) string {
+	// Если уже короткая (XRP, USD и т.д.) - возвращаем как есть
+	if len(currency) <= 3 {
+		return currency
+	}
+
+	// Если не 40 символов - возвращаем как есть
+	if len(currency) != 40 {
+		return currency
+	}
+
+	// Проверяем, что это hex (все символы 0-9, A-F)
+	for _, ch := range currency {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'A' && ch <= 'F') || (ch >= 'a' && ch <= 'f')) {
+			return currency
+		}
+	}
+
+	// Если начинается с 00 - это нестандартная валюта, оставляем hex
+	if currency[:2] == "00" {
+		return currency
+	}
+
+	// Декодируем hex в ASCII
+	var result []byte
+	for i := 0; i < len(currency); i += 2 {
+		b := hexToByte(currency[i], currency[i+1])
+		if b == 0 {
+			break // Останавливаемся на padding нулях
+		}
+		result = append(result, b)
+	}
+
+	if len(result) == 0 {
+		return currency
+	}
+
+	return string(result)
+}
+
+// hexToByte конвертирует два hex символа в байт
+func hexToByte(c1, c2 byte) byte {
+	return hexCharToByte(c1)<<4 | hexCharToByte(c2)
+}
+
+func hexCharToByte(c byte) byte {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0'
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10
+	}
+	return 0
+}
+
 func fmtAmt(s Side) string {
-	unit := s.Currency
+	unit := decodeCurrency(s.Currency)
 	iss := s.Issuer
 	if iss == "" {
 		iss = "-"
@@ -836,8 +923,9 @@ func main() {
 			if c.Delta.IsNegative() {
 				sign = "-"
 			}
+			currencyReadable := decodeCurrency(c.Currency)
 			fmt.Printf("%2d. %-35s %6s %s %s%.6f   [%s]\n",
-				j+1, c.Account, c.Currency, c.Issuer, sign, c.Delta.Abs().InexactFloat64(), c.Kind)
+				j+1, c.Account, currencyReadable, c.Issuer, sign, c.Delta.Abs().InexactFloat64(), c.Kind)
 		}
 		fmt.Printf("Всего записей: %d\n", len(changes))
 
