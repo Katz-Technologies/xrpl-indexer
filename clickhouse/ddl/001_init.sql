@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS xrpl.money_flow
   init_from_amount Decimal(38, 18) CODEC(ZSTD(3)),
   init_to_amount Decimal(38, 18) CODEC(ZSTD(3)),
   quote Decimal(38, 18) CODEC(ZSTD(3)),
-  kind Enum8('unknown' = 0, 'transfer' = 1, 'dexOffer' = 2, 'swap' = 3, 'fee' = 4, 'burn' = 5, 'liquidity' = 6),
+  kind Enum8('unknown' = 0, 'transfer' = 1, 'dexOffer' = 2, 'swap' = 3, 'fee' = 4, 'burn' = 5, 'loss' = 6, 'payout' = 7),
   version UInt64 DEFAULT now64()
 )
 ENGINE = ReplacingMergeTree(version)
@@ -104,7 +104,7 @@ SELECT
   anyLast(
     CAST(
       JSONExtractString(value, 'kind'),
-      'Enum8(''unknown''=0, ''transfer''=1, ''dexOffer''=2, ''swap''=3, ''fee''=4, ''burn''=5, ''liquidity''=6)'
+      'Enum8(''unknown''=0, ''transfer''=1, ''dexOffer''=2, ''swap''=3, ''fee''=4, ''burn''=5, ''loss''=6, ''payout''=7)'
     )
   ) AS kind,
   now64() AS version
