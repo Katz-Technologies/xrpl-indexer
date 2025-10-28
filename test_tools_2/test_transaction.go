@@ -439,20 +439,11 @@ func determineRealIssuerWithBalance(highLimit, lowLimit map[string]interface{}, 
 		return lowIssuer
 	}
 
-	// Случай 3: Оба = 0 (trustline между двумя issuer'ами)
-	// Баланс ведется от лица HighSide:
-	// - Balance отрицательный: HighSide должен LowSide → Issuer = LowSide
-	// - Balance положительный: LowSide должен HighSide → Issuer = HighSide
-	if highIsZero && lowIsZero {
-		if balance.IsNegative() {
-			return lowIssuer
-		} else {
-			return highIssuer
-		}
+	if balance.IsNegative() {
+		return lowIssuer
 	}
 
-	// Если не нашли, возвращаем пустую строку
-	return ""
+	return highIssuer
 }
 
 // detectTokenIssuer определяет эмитента токена из полей Amount / SendMax / DeliveredAmount

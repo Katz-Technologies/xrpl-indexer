@@ -503,15 +503,11 @@ func determineRealIssuerWithBalance(highLimit, lowLimit map[string]interface{}, 
 		return lowIssuer
 	}
 
-	if highIsZero && lowIsZero {
-		if balance.IsNegative() {
-			return lowIssuer
-		} else {
-			return highIssuer
-		}
+	if balance.IsNegative() {
+		return lowIssuer
 	}
 
-	return ""
+	return highIssuer
 }
 
 func extractDecimal(m map[string]interface{}, key string, innerKey string) (decimal.Decimal, bool) {
