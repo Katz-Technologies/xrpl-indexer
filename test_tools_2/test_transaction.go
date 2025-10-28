@@ -227,6 +227,11 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				// Если оба = 0, то смотрим на знак баланса
 				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, balFinal)
 
+				// Если не смогли определить через RippleState, пробуем через поля транзакции
+				if realIssuer == "" {
+					realIssuer = detectTokenIssuer(base, currency)
+				}
+
 				// Определяем burn операцию: если токены отправляются эмитенту
 				isBurn := false
 				if txDestination != "" && txDestination == realIssuer && delta.IsPositive() {
@@ -344,6 +349,11 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				// Определяем реального issuer токена из этой конкретной RippleState: тот, у кого value = 0
 				// Если оба = 0, то смотрим на знак баланса
 				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, balNew)
+
+				// Если не смогли определить через RippleState, пробуем через поля транзакции
+				if realIssuer == "" {
+					realIssuer = detectTokenIssuer(base, currency)
+				}
 
 				// сторона High
 				// Не показываем изменения самого эмитента (у которого value = 0)
@@ -966,7 +976,7 @@ func shortAddr(a string) string {
 // =========================
 func main() {
 	// Обрабатываем файлы от tx_1.json до tx_14.json
-	for i := 13; i <= 24; i++ {
+	for i := 25; i <= 25; i++ {
 		filename := fmt.Sprintf("../examples/tx_%d.json", i)
 
 		fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")
