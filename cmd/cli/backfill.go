@@ -101,6 +101,10 @@ func (cmd *BackfillCommand) Run() error {
 	connections.NewReaders()
 	log.Printf("[BACKFILL] Kafka readers initialized successfully")
 
+	log.Printf("[BACKFILL] Initializing ClickHouse connection...")
+	connections.NewClickHouseConnection()
+	log.Printf("[BACKFILL] ClickHouse connection initialized successfully")
+
 	log.Printf("[BACKFILL] Initializing XRPL client...")
 	connections.NewXrplClientWithURL(cmd.fXrplServer)
 	log.Printf("[BACKFILL] XRPL client initialized successfully")
@@ -119,9 +123,9 @@ func (cmd *BackfillCommand) Run() error {
 	log.Printf("[BACKFILL] Consumers initialization complete")
 
 	defer func() {
-		log.Printf("[BACKFILL] Closing connections...")
-		connections.CloseWriter()
-		connections.CloseReaders()
+		log.Printf("[BACKFILL] Closing remaining connections...")
+		// Writer and readers are already closed before return
+		connections.CloseClickHouse()
 		connections.CloseXrplClient()
 		connections.CloseXrplRPCClient()
 		log.Printf("[BACKFILL] All connections closed")
@@ -147,6 +151,32 @@ func (cmd *BackfillCommand) Run() error {
 	}
 
 	log.Printf("[BACKFILL] Backfill process completed successfully")
+	
+	// Close Kafka writer first to prevent new messages
+	log.Printf("[BACKFILL] Closing Kafka writer to prevent new messages...")
+	connections.CloseWriter()
+	
+	// Wait a bit for any in-flight messages to be written to Kafka
+	time.Sleep(1 * time.Second)
+	
+	// Close Kafka readers to signal consumers that no more messages will arrive
+	// This will cause FetchMessage to return error and close the channel
+	log.Printf("[BACKFILL] Closing Kafka readers to signal end of messages...")
+	connections.CloseReaders()
+	
+	// Wait for consumers to process all messages from Kafka
+	// This will wait until all messages in the channel are processed
+	log.Printf("[BACKFILL] Waiting for all consumer messages to be processed...")
+	consumers.WaitForConsumersToFinish()
+	
+	// Flush all pending ClickHouse batches before closing connections
+	log.Printf("[BACKFILL] Flushing all ClickHouse batches...")
+	if err := connections.FlushClickHouse(); err != nil {
+		log.Printf("[BACKFILL] Error flushing ClickHouse: %v", err)
+	} else {
+		log.Printf("[BACKFILL] ClickHouse batches flushed successfully")
+	}
+	
 	return nil
 }
 

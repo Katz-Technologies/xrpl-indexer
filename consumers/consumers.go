@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/segmentio/kafka-go"
 	"github.com/shopspring/decimal"
-	"github.com/xrpscan/platform/config"
 	"github.com/xrpscan/platform/connections"
 	"github.com/xrpscan/platform/indexer"
 	"github.com/xrpscan/platform/logger"
@@ -20,6 +20,12 @@ import (
 )
 
 const BLACKLIST_ACCOUNT_ROGUE = "rogue5HnPRSszD9CWGSUz8UGHMVwSSKF6"
+
+var (
+	consumerWg      sync.WaitGroup
+	consumerWgMutex sync.Mutex
+	consumerActive  bool
+)
 
 type ChangeKind string
 
@@ -180,11 +186,21 @@ func RunConsumer(conn *kafka.Reader, callback func(m kafka.Message)) {
 func RunBulkConsumer(conn *kafka.Reader, callback func(<-chan kafka.Message)) {
 	ctx := context.Background()
 	ch := make(chan kafka.Message)
-	go callback(ch)
+	
+	// Start callback in goroutine
+	callbackDone := make(chan struct{})
+	go func() {
+		callback(ch)
+		close(callbackDone)
+	}()
 
+	// Read messages and send to channel
 	for {
 		m, err := conn.FetchMessage(ctx)
 		if err != nil {
+			// No more messages, close channel and wait for callback to finish
+			close(ch)
+			<-callbackDone
 			break
 		}
 
@@ -850,180 +866,228 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 }
 
 func RunConsumers() {
+	consumerWgMutex.Lock()
+	consumerActive = true
+	consumerWgMutex.Unlock()
+	
 	go RunBulkConsumer(connections.KafkaReaderTransaction, func(ch <-chan kafka.Message) {
-		ctx := context.Background()
 		for {
-			m := <-ch
-			var tx map[string]interface{}
-			if err := json.Unmarshal(m.Value, &tx); err != nil {
-				logger.Log.Error().Err(err).Msg("Transaction json.Unmarshal error")
-				continue
+			m, ok := <-ch
+			if !ok {
+				// Channel closed, no more messages
+				break
 			}
-			if tt, ok := tx["TransactionType"].(string); ok {
-				if tt != "Payment" {
-					continue
+			
+			// Track message processing
+			consumerWg.Add(1)
+			go func(msg kafka.Message) {
+				defer consumerWg.Done()
+				var tx map[string]interface{}
+				if err := json.Unmarshal(msg.Value, &tx); err != nil {
+					logger.Log.Error().Err(err).Msg("Transaction json.Unmarshal error")
+					return
 				}
-			} else {
-				continue
-			}
-
-			modified, err := indexer.ModifyTransaction(tx)
-			if err != nil {
-				logger.Log.Error().Err(err).Msg("Error fixing transaction object")
-				continue
-			}
-
-			var base map[string]interface{} = modified
-			hash, _ := base["hash"].(string)
-			ledgerIndex, _ := base["ledger_index"].(float64)
-			closeTime, _ := base["date"].(float64)
-			inLedgerIndex := float64(0)
-			if meta, ok := base["meta"].(map[string]interface{}); ok {
-				if r, ok := meta["TransactionResult"].(string); ok {
-					if r != "tesSUCCESS" {
-						continue
+				if tt, ok := tx["TransactionType"].(string); ok {
+					if tt != "Payment" {
+						return
 					}
-				}
-				if ti, ok := meta["TransactionIndex"].(float64); ok {
-					inLedgerIndex = ti
-				}
-			}
-			feeDrops := uint64(0)
-			switch v := base["Fee"].(type) {
-			case float64:
-				feeDrops = uint64(v)
-			case int64:
-				feeDrops = uint64(v)
-			case int:
-				feeDrops = uint64(v)
-			case string:
-				if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
-					feeDrops = parsed
-				}
-			case json.Number:
-				if parsed, err := v.Int64(); err == nil {
-					feeDrops = uint64(parsed)
-				}
-			}
-
-			const rippleToUnix int64 = 946684800
-			closeTimeUnix := int64(closeTime) + rippleToUnix
-
-			changes := ExtractBalanceChanges(base)
-			actions := BuildActionGroups(base, changes)
-
-			for _, action := range actions {
-				if len(action.Sides) == 0 {
-					continue
-				}
-
-				var fromSide, toSide Side
-				var kind string
-
-				switch action.Kind {
-				case ActFee:
-					fromSide = action.Sides[0]
-					toSide = Side{
-						Account:     "",
-						Currency:    "XRP",
-						Issuer:      "XRP",
-						Amount:      decimal.Zero,
-						InitBalance: decimal.Zero,
-					}
-					kind = "fee"
-				case ActBurn:
-					fromSide = action.Sides[0]
-					toSide = Side{
-						Account:     "",
-						Currency:    fromSide.Currency,
-						Issuer:      fromSide.Issuer,
-						Amount:      decimal.Zero,
-						InitBalance: decimal.Zero,
-					}
-					kind = "burn"
-				case ActPayout:
-					toSide = action.Sides[0]
-					fromSide = Side{
-						Account:     "",
-						Currency:    toSide.Currency,
-						Issuer:      toSide.Issuer,
-						Amount:      decimal.Zero,
-						InitBalance: decimal.Zero,
-					}
-					kind = "payout"
-				case ActLoss:
-					fromSide = action.Sides[0]
-					toSide = Side{
-						Account:     "",
-						Currency:    fromSide.Currency,
-						Issuer:      fromSide.Issuer,
-						Amount:      decimal.Zero,
-						InitBalance: decimal.Zero,
-					}
-					kind = "loss"
-				case ActSwap, ActDexOffer:
-					if len(action.Sides) >= 2 {
-						fromSide = action.Sides[0]
-						toSide = action.Sides[1]
-						if action.Kind == ActSwap {
-							kind = "swap"
-						} else {
-							kind = "dexOffer"
-						}
-					} else {
-						continue
-					}
-				case ActTransfer:
-					if len(action.Sides) >= 2 {
-						fromSide = action.Sides[0]
-						toSide = action.Sides[1]
-						kind = "transfer"
-					} else {
-						continue
-					}
-				default:
-					continue
-				}
-
-				var rate decimal.Decimal = decimal.Zero
-				if (action.Kind == ActSwap || action.Kind == ActDexOffer) && !toSide.Amount.IsZero() {
-					rate = fromSide.Amount.Abs().Div(toSide.Amount.Abs())
 				} else {
-					rate = decimal.NewFromInt(1)
+					return
 				}
 
-				if fromSide.Account == BLACKLIST_ACCOUNT_ROGUE {
-					continue
-				}
-				if toSide.Account == BLACKLIST_ACCOUNT_ROGUE {
-					continue
-				}
-
-				row := models.CHMoneyFlowRow{
-					TxHash:            hash,
-					LedgerIndex:       uint32(ledgerIndex),
-					InLedgerIndex:     uint32(inLedgerIndex),
-					CloseTimeUnix:     closeTimeUnix,
-					FeeDrops:          feeDrops,
-					FromAddress:       fromSide.Account,
-					ToAddress:         toSide.Account,
-					FromCurrency:      fromSide.Currency,
-					FromIssuerAddress: fixIssuerForXRP(fromSide.Currency, fromSide.Issuer),
-					ToCurrency:        toSide.Currency,
-					ToIssuerAddress:   fixIssuerForXRP(toSide.Currency, toSide.Issuer),
-					FromAmount:        fromSide.Amount.String(),
-					ToAmount:          toSide.Amount.String(),
-					InitFromAmount:    fromSide.InitBalance.String(),
-					InitToAmount:      toSide.InitBalance.String(),
-					Quote:             rate.String(),
-					Kind:              kind,
-					Version:           generateVersion(),
+				modified, err := indexer.ModifyTransaction(tx)
+				if err != nil {
+					logger.Log.Error().Err(err).Msg("Error fixing transaction object")
+					return
 				}
 
-				if rowData, err := json.Marshal(row); err == nil {
-					_ = connections.KafkaWriter.WriteMessages(ctx, kafka.Message{Topic: config.TopicCHMoneyFlows(), Key: []byte(hash), Value: rowData})
+				var base map[string]interface{} = modified
+				hash, _ := base["hash"].(string)
+				ledgerIndex, _ := base["ledger_index"].(float64)
+				closeTime, _ := base["date"].(float64)
+				inLedgerIndex := float64(0)
+				if meta, ok := base["meta"].(map[string]interface{}); ok {
+					if r, ok := meta["TransactionResult"].(string); ok {
+						if r != "tesSUCCESS" {
+							return
+						}
+					}
+					if ti, ok := meta["TransactionIndex"].(float64); ok {
+						inLedgerIndex = ti
+					}
 				}
-			}
+				feeDrops := uint64(0)
+				switch v := base["Fee"].(type) {
+				case float64:
+					feeDrops = uint64(v)
+				case int64:
+					feeDrops = uint64(v)
+				case int:
+					feeDrops = uint64(v)
+				case string:
+					if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+						feeDrops = parsed
+					}
+				case json.Number:
+					if parsed, err := v.Int64(); err == nil {
+						feeDrops = uint64(parsed)
+					}
+				}
+
+				const rippleToUnix int64 = 946684800
+				closeTimeUnix := int64(closeTime) + rippleToUnix
+
+				changes := ExtractBalanceChanges(base)
+				actions := BuildActionGroups(base, changes)
+
+				for _, action := range actions {
+					if len(action.Sides) == 0 {
+						continue
+					}
+
+					var fromSide, toSide Side
+					var kind string
+
+					switch action.Kind {
+					case ActFee:
+						fromSide = action.Sides[0]
+						toSide = Side{
+							Account:     "",
+							Currency:    "XRP",
+							Issuer:      "XRP",
+							Amount:      decimal.Zero,
+							InitBalance: decimal.Zero,
+						}
+						kind = "fee"
+					case ActBurn:
+						fromSide = action.Sides[0]
+						toSide = Side{
+							Account:     "",
+							Currency:    fromSide.Currency,
+							Issuer:      fromSide.Issuer,
+							Amount:      decimal.Zero,
+							InitBalance: decimal.Zero,
+						}
+						kind = "burn"
+					case ActPayout:
+						toSide = action.Sides[0]
+						fromSide = Side{
+							Account:     "",
+							Currency:    toSide.Currency,
+							Issuer:      toSide.Issuer,
+							Amount:      decimal.Zero,
+							InitBalance: decimal.Zero,
+						}
+						kind = "payout"
+					case ActLoss:
+						fromSide = action.Sides[0]
+						toSide = Side{
+							Account:     "",
+							Currency:    fromSide.Currency,
+							Issuer:      fromSide.Issuer,
+							Amount:      decimal.Zero,
+							InitBalance: decimal.Zero,
+						}
+						kind = "loss"
+					case ActSwap, ActDexOffer:
+						if len(action.Sides) >= 2 {
+							fromSide = action.Sides[0]
+							toSide = action.Sides[1]
+							if action.Kind == ActSwap {
+								kind = "swap"
+							} else {
+								kind = "dexOffer"
+							}
+						} else {
+							continue
+						}
+					case ActTransfer:
+						if len(action.Sides) >= 2 {
+							fromSide = action.Sides[0]
+							toSide = action.Sides[1]
+							kind = "transfer"
+						} else {
+							continue
+						}
+					default:
+						continue
+					}
+
+					var rate decimal.Decimal = decimal.Zero
+					if (action.Kind == ActSwap || action.Kind == ActDexOffer) && !toSide.Amount.IsZero() {
+						rate = fromSide.Amount.Abs().Div(toSide.Amount.Abs())
+					} else {
+						rate = decimal.NewFromInt(1)
+					}
+
+					if fromSide.Account == BLACKLIST_ACCOUNT_ROGUE {
+						continue
+					}
+					if toSide.Account == BLACKLIST_ACCOUNT_ROGUE {
+						continue
+					}
+
+					row := models.CHMoneyFlowRow{
+						TxHash:            hash,
+						LedgerIndex:       uint32(ledgerIndex),
+						InLedgerIndex:     uint32(inLedgerIndex),
+						CloseTimeUnix:     closeTimeUnix,
+						FeeDrops:          feeDrops,
+						FromAddress:       fromSide.Account,
+						ToAddress:         toSide.Account,
+						FromCurrency:      fromSide.Currency,
+						FromIssuerAddress: fixIssuerForXRP(fromSide.Currency, fromSide.Issuer),
+						ToCurrency:        toSide.Currency,
+						ToIssuerAddress:   fixIssuerForXRP(toSide.Currency, toSide.Issuer),
+						FromAmount:        fromSide.Amount.String(),
+						ToAmount:          toSide.Amount.String(),
+						InitFromAmount:    fromSide.InitBalance.String(),
+						InitToAmount:      toSide.InitBalance.String(),
+						Quote:             rate.String(),
+						Kind:              kind,
+						Version:           generateVersion(),
+					}
+
+					// Write directly to ClickHouse instead of Kafka
+					if err := connections.WriteMoneyFlowRow(
+						row.TxHash,
+						row.LedgerIndex,
+						row.InLedgerIndex,
+						row.CloseTimeUnix,
+						row.FeeDrops,
+						row.FromAddress,
+						row.ToAddress,
+						row.FromCurrency,
+						row.FromIssuerAddress,
+						row.ToCurrency,
+						row.ToIssuerAddress,
+						row.FromAmount,
+						row.ToAmount,
+						row.InitFromAmount,
+						row.InitToAmount,
+						row.Quote,
+						row.Kind,
+						row.Version,
+					); err != nil {
+						logger.Log.Error().Err(err).Str("tx_hash", hash).Msg("Failed to write money flow row to ClickHouse")
+					}
+				}
+			}(m)
 		}
 	})
+}
+
+// WaitForConsumersToFinish waits for all consumer messages to be processed
+func WaitForConsumersToFinish() {
+	consumerWgMutex.Lock()
+	active := consumerActive
+	consumerWgMutex.Unlock()
+	
+	if !active {
+		return
+	}
+	
+	logger.Log.Info().Msg("Waiting for all consumer messages to be processed...")
+	consumerWg.Wait()
+	logger.Log.Info().Msg("All consumer messages processed")
 }

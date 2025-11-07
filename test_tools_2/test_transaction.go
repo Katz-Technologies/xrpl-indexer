@@ -225,7 +225,7 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 
 				// Определяем реального issuer токена из этой конкретной RippleState: тот, у кого value = 0
 				// Если оба = 0, то смотрим на знак баланса
-				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, balFinal)
+				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, balPrev, balFinal)
 
 				// Если не смогли определить через RippleState, пробуем через поля транзакции
 				if realIssuer == "" {
@@ -260,6 +260,14 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 						kind = KindPayout
 					}
 					// Начальный баланс для HighSide: -balPrev (баланс инвертирован)
+
+					fmt.Println("Kind123123", kind)
+					fmt.Println("Delta123123", delta)
+					fmt.Println("normalizeAmount(balFinal.Sub(balPrev))", normalizeAmount(balFinal.Sub(balPrev)))
+					fmt.Println("balFinal.Sub(balPrev)", balFinal.Sub(balPrev))
+					fmt.Println("balFinal", balFinal)
+					fmt.Println("balPrev", balFinal.Sub(balPrev))
+
 					initBalanceHigh := balPrev.Neg()
 					result = append(result, BalanceChange{
 						Account:     highIssuer,
@@ -348,7 +356,7 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 
 				// Определяем реального issuer токена из этой конкретной RippleState: тот, у кого value = 0
 				// Если оба = 0, то смотрим на знак баланса
-				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, balNew)
+				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, decimal.Zero, balNew)
 
 				// Если не смогли определить через RippleState, пробуем через поля транзакции
 				if realIssuer == "" {
@@ -422,7 +430,7 @@ func determineRealIssuer(highLimit, lowLimit map[string]interface{}, highIssuer,
 }
 
 // determineRealIssuerWithBalance определяет issuer с учетом баланса (для случая оба limit = 0)
-func determineRealIssuerWithBalance(highLimit, lowLimit map[string]interface{}, highIssuer, lowIssuer string, balance decimal.Decimal) string {
+func determineRealIssuerWithBalance(highLimit, lowLimit map[string]interface{}, highIssuer, lowIssuer string, prevBalance decimal.Decimal, finalBalance decimal.Decimal) string {
 	highValue, highOk := highLimit["value"].(string)
 	lowValue, lowOk := lowLimit["value"].(string)
 
@@ -439,7 +447,7 @@ func determineRealIssuerWithBalance(highLimit, lowLimit map[string]interface{}, 
 		return lowIssuer
 	}
 
-	if balance.IsNegative() {
+	if prevBalance.IsNegative() || finalBalance.IsNegative() {
 		return lowIssuer
 	}
 
@@ -967,7 +975,7 @@ func shortAddr(a string) string {
 // =========================
 func main() {
 	// Обрабатываем файлы от tx_1.json до tx_14.json
-	for i := 25; i <= 25; i++ {
+	for i := 20; i <= 28; i++ {
 		filename := fmt.Sprintf("../examples/tx_%d.json", i)
 
 		fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")

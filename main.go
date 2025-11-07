@@ -19,6 +19,7 @@ func main() {
 
 	connections.NewWriter()
 	connections.NewReaders()
+	connections.NewClickHouseConnection()
 	connections.NewXrplClient()
 	connections.NewXrplRPCClient()
 

@@ -145,4 +145,58 @@ func EnvKafkaWriterRequiredAcks() int {
 	return 1 // leader-only default
 }
 
+/*
+* ClickHouse settings
+ */
+func EnvClickHouseHost() string {
+	v := os.Getenv("CLICKHOUSE_HOST")
+	if v == "" {
+		return "localhost"
+	}
+	return v
+}
+
+func EnvClickHousePort() int {
+	if v, err := strconv.Atoi(os.Getenv("CLICKHOUSE_PORT")); err == nil && v > 0 {
+		return v
+	}
+	return 9000 // default native port
+}
+
+func EnvClickHouseDatabase() string {
+	v := os.Getenv("CLICKHOUSE_DATABASE")
+	if v == "" {
+		return "xrpl"
+	}
+	return v
+}
+
+func EnvClickHouseUser() string {
+	v := os.Getenv("CLICKHOUSE_USER")
+	if v == "" {
+		return "default"
+	}
+	return v
+}
+
+func EnvClickHousePassword() string {
+	return os.Getenv("CLICKHOUSE_PASSWORD")
+}
+
+// Batch size for ClickHouse inserts
+func EnvClickHouseBatchSize() int {
+	if v, err := strconv.Atoi(os.Getenv("CLICKHOUSE_BATCH_SIZE")); err == nil && v > 0 {
+		return v
+	}
+	return 5000 // default 1000 rows per batch
+}
+
+// Batch timeout in milliseconds for ClickHouse inserts
+func EnvClickHouseBatchTimeoutMs() int {
+	if v, err := strconv.Atoi(os.Getenv("CLICKHOUSE_BATCH_TIMEOUT_MS")); err == nil && v > 0 {
+		return v
+	}
+	return 5000 // default 1 second
+}
+
 // Removed: Elasticsearch settings are no longer used

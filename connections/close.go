@@ -122,6 +122,11 @@ func CloseEsClient() {
 }
 
 func CloseXrplClient() {
+	// Flush all pending ClickHouse batches before closing XRPL connection
+	if err := FlushClickHouse(); err != nil {
+		log.Printf("Error flushing ClickHouse before closing XRPL client: %v", err)
+	}
+	
 	closeWithTimeout("XRPL client", func() error {
 		if XrplClient != nil {
 			return XrplClient.Close()
@@ -173,6 +178,13 @@ func CloseAll() {
 	go func() {
 		defer wg.Done()
 		CloseXrplRPCClient()
+	}()
+
+	// Close ClickHouse connection
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		CloseClickHouse()
 	}()
 
 	// Close ES client (currently no-op)
