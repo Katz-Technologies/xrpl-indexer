@@ -37,24 +37,78 @@ type BalanceChange struct {
 }
 
 var (
-	eps           = decimal.NewFromFloat(1e-9)
-	dustThreshold = decimal.NewFromFloat(1e-12) // всё меньше — считаем нулём
-	maxIOUValue   = decimal.NewFromFloat(1e20)  // всё больше — считаем мусором
+	eps           = decimal.NewFromFloat(1e-100) // очень маленький порог для работы с числами до 100 знаков после запятой
+	dustThreshold = decimal.NewFromFloat(1e-100) // всё меньше — считаем нулём (очень маленький порог)
 )
 
-// normalizeAmount ограничивает диапазон и убирает "пыль" IOU-значений
+// normalizeAmount убирает только "пыль" IOU-значений, но не ограничивает большие числа
+// Все вычисления должны быть точными с поддержкой до 100 знаков до и после запятой
 func normalizeAmount(val decimal.Decimal) decimal.Decimal {
 	abs := val.Abs()
 
+	// Убираем только очень маленькую "пыль", но не ограничиваем большие числа
 	if abs.LessThan(dustThreshold) {
 		return decimal.Zero
 	}
 
-	if abs.GreaterThan(maxIOUValue) {
-		return decimal.Zero
+	// Не ограничиваем большие числа - они будут отфильтрованы позже при построении связок
+	return val
+}
+
+// isWithinRange проверяет, находится ли число в допустимом диапазоне:
+// - не более 38 знаков до запятой
+// - не более 18 значащих цифр после запятой
+func isWithinRange(val decimal.Decimal) bool {
+	if val.IsZero() {
+		return true
 	}
 
-	return val
+	abs := val.Abs()
+
+	// Получаем строковое представление с максимальной точностью (до 100 знаков после запятой)
+	// StringFixed(100) даст нам число без научной нотации
+	str := abs.StringFixed(100)
+
+	// Разбираем строку на целую и дробную части
+	parts := strings.Split(str, ".")
+	var intPart, fracPart string
+
+	if len(parts) == 1 {
+		// Нет дробной части
+		intPart = parts[0]
+		fracPart = ""
+	} else {
+		intPart = parts[0]
+		fracPart = parts[1]
+	}
+
+	// Убираем ведущие нули из целой части для подсчета значащих цифр
+	intPart = strings.TrimLeft(intPart, "0")
+	if intPart == "" {
+		intPart = "0"
+	}
+
+	// Убираем trailing zeros из дробной части
+	fracPart = strings.TrimRight(fracPart, "0")
+
+	// Убираем leading zeros из дробной части для подсчета только значащих цифр
+	// Ведущие нули в дробной части - это не значащие цифры, а просто позиция запятой
+	fracPartSignificant := strings.TrimLeft(fracPart, "0")
+	if fracPartSignificant == "" {
+		fracPartSignificant = "0"
+	}
+
+	// Проверяем: не более 38 знаков до запятой
+	if len(intPart) > 38 {
+		return false
+	}
+
+	// Проверяем: не более 18 значащих цифр после запятой
+	if len(fracPartSignificant) > 18 {
+		return false
+	}
+
+	return true
 }
 
 // ExtractBalanceChanges собирает реальные изменения балансов (XRP + IOU)
@@ -260,14 +314,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 						kind = KindPayout
 					}
 					// Начальный баланс для HighSide: -balPrev (баланс инвертирован)
-
-					fmt.Println("Kind123123", kind)
-					fmt.Println("Delta123123", delta)
-					fmt.Println("normalizeAmount(balFinal.Sub(balPrev))", normalizeAmount(balFinal.Sub(balPrev)))
-					fmt.Println("balFinal.Sub(balPrev)", balFinal.Sub(balPrev))
-					fmt.Println("balFinal", balFinal)
-					fmt.Println("balPrev", balFinal.Sub(balPrev))
-
 					initBalanceHigh := balPrev.Neg()
 					result = append(result, BalanceChange{
 						Account:     highIssuer,
@@ -394,39 +440,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 	}
 
 	return result
-}
-
-// determineRealIssuer определяет реального эмитента токена из RippleState
-// Issuer - это тот аккаунт, у которого в HighLimit или LowLimit value = 0
-func determineRealIssuer(highLimit, lowLimit map[string]interface{}, highIssuer, lowIssuer string) string {
-	highValue, highOk := highLimit["value"].(string)
-	lowValue, lowOk := lowLimit["value"].(string)
-
-	highIsZero := highOk && highValue == "0"
-	lowIsZero := lowOk && lowValue == "0"
-
-	// Случай 1: Только HighLimit = 0 → HighSide issuer
-	if highIsZero && !lowIsZero {
-		return highIssuer
-	}
-
-	// Случай 2: Только LowLimit = 0 → LowSide issuer
-	if lowIsZero && !highIsZero {
-		return lowIssuer
-	}
-
-	// Случай 3: Оба = 0 (trustline между двумя issuer'ами)
-	// Смотрим на знак баланса
-	if highIsZero && lowIsZero {
-		// Нужен баланс из FinalFields или NewFields
-		// Эту функцию вызывают с final/newFields, поэтому баланс должен быть доступен
-		// через переданный контекст. Но т.к. мы передаем только limit'ы,
-		// нужно передать баланс отдельно
-		return "" // Вернем пустую строку, обработаем выше
-	}
-
-	// Если не нашли, возвращаем пустую строку
-	return ""
 }
 
 // determineRealIssuerWithBalance определяет issuer с учетом баланса (для случая оба limit = 0)
@@ -656,43 +669,50 @@ func pairAccountActions(
 	for k := 0; k < n; k++ {
 		ip := pos[k]
 		in := neg[k]
-		acts = append(acts, Action{
-			Kind: actionKind,
-			Sides: []Side{
-				{
-					Account:     account,
-					Currency:    changes[in].Currency,
-					Issuer:      changes[in].Issuer,
-					Amount:      changes[in].Delta, // минус
-					InitBalance: changes[in].InitBalance,
+		// Проверяем, что обе дельты в допустимом диапазоне
+		if isWithinRange(changes[ip].Delta) && isWithinRange(changes[in].Delta) {
+			acts = append(acts, Action{
+				Kind: actionKind,
+				Sides: []Side{
+					{
+						Account:     account,
+						Currency:    changes[in].Currency,
+						Issuer:      changes[in].Issuer,
+						Amount:      changes[in].Delta, // минус
+						InitBalance: changes[in].InitBalance,
+					},
+					{
+						Account:     account,
+						Currency:    changes[ip].Currency,
+						Issuer:      changes[ip].Issuer,
+						Amount:      changes[ip].Delta, // плюс
+						InitBalance: changes[ip].InitBalance,
+					},
 				},
-				{
-					Account:     account,
-					Currency:    changes[ip].Currency,
-					Issuer:      changes[ip].Issuer,
-					Amount:      changes[ip].Delta, // плюс
-					InitBalance: changes[ip].InitBalance,
-				},
-			},
-			Note: fmt.Sprintf("%s pair for %s", actionKind, account),
-		})
-		used[ip] = true
-		used[in] = true
-		// проставим Kind у изменений
-		switch actionKind {
-		case ActSwap:
-			changes[ip].Kind = KindSwap
-			changes[in].Kind = KindSwap
-		case ActDexOffer:
-			changes[ip].Kind = KindDexOffer
-			changes[in].Kind = KindDexOffer
+				Note: fmt.Sprintf("%s pair for %s", actionKind, account),
+			})
+			// проставим Kind у изменений
+			switch actionKind {
+			case ActSwap:
+				changes[ip].Kind = KindSwap
+				changes[in].Kind = KindSwap
+			case ActDexOffer:
+				changes[ip].Kind = KindDexOffer
+				changes[in].Kind = KindDexOffer
+			}
+			// Помечаем как использованные только если связка прошла проверку диапазона
+			used[ip] = true
+			used[in] = true
 		}
+		// Если связка не прошла проверку диапазона, не помечаем как used,
+		// чтобы эти изменения могли быть обработаны как Loss в конце
 	}
 
 	return
 }
 
 // BuildActionGroups — формирует связки действий из списка изменённых балансов
+// Фильтрует связки, где хотя бы одна дельта выходит за рамки (38 знаков до, 18 после запятой)
 func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Action {
 	var actions []Action
 	used := make([]bool, len(changes))
@@ -703,17 +723,20 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 	// 1) Fee (явное)
 	for i := range changes {
 		if changes[i].Kind == KindFee && !used[i] {
-			actions = append(actions, Action{
-				Kind: ActFee,
-				Sides: []Side{{
-					Account:     changes[i].Account,
-					Currency:    "XRP",
-					Issuer:      "XRP",
-					Amount:      changes[i].Delta, // отрицательное
-					InitBalance: changes[i].InitBalance,
-				}},
-				Note: "Fee",
-			})
+			// Проверяем, что дельта в допустимом диапазоне
+			if isWithinRange(changes[i].Delta) {
+				actions = append(actions, Action{
+					Kind: ActFee,
+					Sides: []Side{{
+						Account:     changes[i].Account,
+						Currency:    "XRP",
+						Issuer:      "XRP",
+						Amount:      changes[i].Delta, // отрицательное
+						InitBalance: changes[i].InitBalance,
+					}},
+					Note: "Fee",
+				})
+			}
 			used[i] = true
 		}
 	}
@@ -721,17 +744,20 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 	// 2) Burn (явное)
 	for i := range changes {
 		if changes[i].Kind == KindBurn && !used[i] {
-			actions = append(actions, Action{
-				Kind: ActBurn,
-				Sides: []Side{{
-					Account:     changes[i].Account,
-					Currency:    changes[i].Currency,
-					Issuer:      changes[i].Issuer,
-					Amount:      changes[i].Delta, // отрицательное (токены сжигаются)
-					InitBalance: changes[i].InitBalance,
-				}},
-				Note: "Burn",
-			})
+			// Проверяем, что дельта в допустимом диапазоне
+			if isWithinRange(changes[i].Delta) {
+				actions = append(actions, Action{
+					Kind: ActBurn,
+					Sides: []Side{{
+						Account:     changes[i].Account,
+						Currency:    changes[i].Currency,
+						Issuer:      changes[i].Issuer,
+						Amount:      changes[i].Delta, // отрицательное (токены сжигаются)
+						InitBalance: changes[i].InitBalance,
+					}},
+					Note: "Burn",
+				})
+			}
 			used[i] = true
 		}
 	}
@@ -739,17 +765,20 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 	// 3) Payout (явное)
 	for i := range changes {
 		if changes[i].Kind == KindPayout && !used[i] {
-			actions = append(actions, Action{
-				Kind: ActPayout,
-				Sides: []Side{{
-					Account:     changes[i].Account,
-					Currency:    changes[i].Currency,
-					Issuer:      changes[i].Issuer,
-					Amount:      changes[i].Delta,
-					InitBalance: changes[i].InitBalance,
-				}},
-				Note: "Payout",
-			})
+			// Проверяем, что дельта в допустимом диапазоне
+			if isWithinRange(changes[i].Delta) {
+				actions = append(actions, Action{
+					Kind: ActPayout,
+					Sides: []Side{{
+						Account:     changes[i].Account,
+						Currency:    changes[i].Currency,
+						Issuer:      changes[i].Issuer,
+						Amount:      changes[i].Delta,
+						InitBalance: changes[i].InitBalance,
+					}},
+					Note: "Payout",
+				})
+			}
 			used[i] = true
 		}
 	}
@@ -757,17 +786,20 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 	// 4) Loss (явное)
 	for i := range changes {
 		if changes[i].Kind == KindLoss && !used[i] {
-			actions = append(actions, Action{
-				Kind: ActLoss,
-				Sides: []Side{{
-					Account:     changes[i].Account,
-					Currency:    "XRP",
-					Issuer:      "XRP",
-					Amount:      changes[i].Delta,
-					InitBalance: changes[i].InitBalance,
-				}},
-				Note: "Loss",
-			})
+			// Проверяем, что дельта в допустимом диапазоне
+			if isWithinRange(changes[i].Delta) {
+				actions = append(actions, Action{
+					Kind: ActLoss,
+					Sides: []Side{{
+						Account:     changes[i].Account,
+						Currency:    "XRP",
+						Issuer:      "XRP",
+						Amount:      changes[i].Delta,
+						InitBalance: changes[i].InitBalance,
+					}},
+					Note: "Loss",
+				})
+			}
 			used[i] = true
 		}
 	}
@@ -836,49 +868,64 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 	}
 
 	if senderNegIdx >= 0 && destPosIdx >= 0 {
-		actions = append(actions, Action{
-			Kind: ActTransfer,
-			Sides: []Side{
-				{
-					Account:     changes[senderNegIdx].Account,
-					Currency:    changes[senderNegIdx].Currency,
-					Issuer:      changes[senderNegIdx].Issuer,
-					Amount:      changes[senderNegIdx].Delta, // -
-					InitBalance: changes[senderNegIdx].InitBalance,
+		// Проверяем, что обе дельты в допустимом диапазоне
+		if isWithinRange(changes[senderNegIdx].Delta) && isWithinRange(changes[destPosIdx].Delta) {
+			actions = append(actions, Action{
+				Kind: ActTransfer,
+				Sides: []Side{
+					{
+						Account:     changes[senderNegIdx].Account,
+						Currency:    changes[senderNegIdx].Currency,
+						Issuer:      changes[senderNegIdx].Issuer,
+						Amount:      changes[senderNegIdx].Delta, // -
+						InitBalance: changes[senderNegIdx].InitBalance,
+					},
+					{
+						Account:     changes[destPosIdx].Account,
+						Currency:    changes[destPosIdx].Currency,
+						Issuer:      changes[destPosIdx].Issuer,
+						Amount:      changes[destPosIdx].Delta, // +
+						InitBalance: changes[destPosIdx].InitBalance,
+					},
 				},
-				{
-					Account:     changes[destPosIdx].Account,
-					Currency:    changes[destPosIdx].Currency,
-					Issuer:      changes[destPosIdx].Issuer,
-					Amount:      changes[destPosIdx].Delta, // +
-					InitBalance: changes[destPosIdx].InitBalance,
-				},
-			},
-			Note: "Transfer (sender->destination, possibly cross-currency)",
-		})
-		used[senderNegIdx] = true
-		used[destPosIdx] = true
-		// пометим Kind у изменений
-		changes[senderNegIdx].Kind = KindTransfer
-		changes[destPosIdx].Kind = KindTransfer
+				Note: "Transfer (sender->destination, possibly cross-currency)",
+			})
+			// пометим Kind у изменений
+			changes[senderNegIdx].Kind = KindTransfer
+			changes[destPosIdx].Kind = KindTransfer
+			// Помечаем как использованные только если Transfer прошел проверку диапазона
+			used[senderNegIdx] = true
+			used[destPosIdx] = true
+		}
+		// Если Transfer не прошел проверку диапазона, не помечаем как used,
+		// чтобы эти изменения могли быть обработаны как Loss в конце
 	}
 
-	// 8) Остатки — как Unknown (редкие случаи, например, частичные/мульти-пары)
+	// 8) Остатки — как Loss или Payout (редкие случаи, например, частичные/мульти-пары)
 	for i := range changes {
 		if used[i] {
 			continue
 		}
-		actions = append(actions, Action{
-			Kind: ActLoss,
-			Sides: []Side{{
-				Account:     changes[i].Account,
-				Currency:    changes[i].Currency,
-				Issuer:      changes[i].Issuer,
-				Amount:      changes[i].Delta,
-				InitBalance: changes[i].InitBalance,
-			}},
-			Note: "Loss (unpaired residue)",
-		})
+		// Проверяем, что дельта в допустимом диапазоне
+		if isWithinRange(changes[i].Delta) {
+			actionKind := ActLoss
+			note := "Loss (unpaired residue)"
+			if sign(changes[i].Delta) > 0 {
+				actionKind = ActPayout
+				note = "Payout (unpaired residue)"
+			}
+			actions = append(actions, Action{
+				Kind: actionKind,
+				Sides: []Side{{
+					Account:     changes[i].Account,
+					Currency:    changes[i].Currency,
+					Issuer:      changes[i].Issuer,
+					Amount:      changes[i].Delta,
+					InitBalance: changes[i].InitBalance,
+				}},
+				Note: note,
+			})
+		}
 	}
 
 	return actions
@@ -960,22 +1007,12 @@ func fmtAmt(s Side) string {
 		sign, s.Amount.Abs().InexactFloat64(), unit, iss, s.InitBalance.InexactFloat64())
 }
 
-func shortAddr(a string) string {
-	if a == "" || a == "XRP" {
-		return a
-	}
-	if len(a) <= 6 {
-		return a
-	}
-	return a[:3] + "…" + a[len(a)-3:]
-}
-
 // =========================
 // Main
 // =========================
 func main() {
 	// Обрабатываем файлы от tx_1.json до tx_14.json
-	for i := 20; i <= 28; i++ {
+	for i := 20; i <= 30; i++ {
 		filename := fmt.Sprintf("../examples/tx_%d.json", i)
 
 		fmt.Printf("\n" + strings.Repeat("=", 80) + "\n")
@@ -1008,7 +1045,7 @@ func main() {
 				sign = "-"
 			}
 			currencyReadable := decodeCurrency(c.Currency)
-			fmt.Printf("%2d. %-35s %6s %s %s%.6f (init: %.6f)  [%s]\n",
+			fmt.Printf("%2d. %-35s %6s %s %s%.12f (init: %.12f)  [%s]\n",
 				j+1, c.Account, currencyReadable, c.Issuer, sign, c.Delta.Abs().InexactFloat64(),
 				c.InitBalance.InexactFloat64(), c.Kind)
 		}

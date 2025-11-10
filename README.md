@@ -138,7 +138,7 @@ run
 
 
 Linux
-go build -o ./bin/platform-server ./ 
+go build -o ./bin/platform-server ./
 go build -o ./bin/platform-cli ./cmd/cli
 
 run
