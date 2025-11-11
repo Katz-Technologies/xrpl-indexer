@@ -140,6 +140,7 @@ run
 Linux
 go build -o ./bin/platform-server ./
 go build -o ./bin/platform-cli ./cmd/cli
+go build -o ./bin/platform-orchestrator cmd/orchestrator/*.go
 
 run
 ./bin/platform-server

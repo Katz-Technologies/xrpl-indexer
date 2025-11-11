@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,16 @@ const BackfillCommandName = "backfill"
 const defaultIndexFrom int = 82000000
 const defaultIndexTo int = 82001000
 const defaultMinDelay int64 = 100 // milliseconds
+
+// getMinDelay gets the minimum delay from environment variable or uses default
+func getMinDelay(defaultDelay int64) int64 {
+	if envDelay := os.Getenv("BACKFILL_MIN_DELAY_MS"); envDelay != "" {
+		if delay, err := strconv.ParseInt(envDelay, 10, 64); err == nil && delay > 0 {
+			return delay
+		}
+	}
+	return defaultDelay
+}
 
 type BackfillCommand struct {
 	fs          *flag.FlagSet
@@ -46,7 +57,7 @@ func NewBackfillCommand() *BackfillCommand {
 	cmd.fs.StringVar(&cmd.fConfigFile, "config", ".env", "Environment config file")
 	cmd.fs.BoolVar(&cmd.fVerbose, "verbose", false, "Make the command more talkative")
 	cmd.fs.StringVar(&cmd.fXrplServer, "server", "", "XRPL protocol compatible server to connect")
-	cmd.fs.Int64Var(&cmd.fMinDelay, "delay", defaultMinDelay, "Minimum delay (ms) between requests to XRPL server")
+	cmd.fs.Int64Var(&cmd.fMinDelay, "delay", getMinDelay(defaultMinDelay), "Minimum delay (ms) between requests to XRPL server (can be overridden by BACKFILL_MIN_DELAY_MS env var)")
 	return cmd
 }
 
@@ -409,6 +420,17 @@ func (cmd *BackfillCommand) backfillTransactions(ledgerJSON []byte) error {
 
 	log.Printf("[BACKFILL] Ledger %d processing summary: total=%d, processed=%d, skipped=%d, errors=%d",
 		ledger.LedgerIndex, len(txs), processedCount, skippedCount, errorCount)
+
+	// If no Payment transactions were processed, record this ledger as empty
+	if processedCount == 0 {
+		if err := connections.RecordEmptyLedger(uint32(ledgerIndex), int64(closeTime), uint32(len(txs))); err != nil {
+			log.Printf("[BACKFILL] Failed to record empty ledger %d: %v", ledgerIndex, err)
+			// Don't fail the whole process if recording empty ledger fails
+		} else {
+			log.Printf("[BACKFILL] Recorded ledger %d as empty (no Payment transactions, total txs: %d)",
+				ledgerIndex, len(txs))
+		}
+	}
 
 	return nil
 }

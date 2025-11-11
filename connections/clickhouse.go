@@ -49,6 +49,8 @@ type ClickHouseBatchWriter struct {
 	flushTicker    *time.Ticker
 	stopChan       chan struct{}
 	wg             sync.WaitGroup
+	stopped        bool
+	stopOnce       sync.Once
 }
 
 // NewClickHouseConnection initializes ClickHouse connection
@@ -133,12 +135,25 @@ func (w *ClickHouseBatchWriter) Start() {
 
 // Stop stops the batch writer and flushes remaining data
 func (w *ClickHouseBatchWriter) Stop() {
-	close(w.stopChan)
-	if w.flushTicker != nil {
-		w.flushTicker.Stop()
-	}
-	w.wg.Wait()
-	w.Flush() // Final flush
+	w.stopOnce.Do(func() {
+		w.mu.Lock()
+		w.stopped = true
+		w.mu.Unlock()
+
+		// Close channel only if not already closed
+		select {
+		case <-w.stopChan:
+			// Channel already closed
+		default:
+			close(w.stopChan)
+		}
+
+		if w.flushTicker != nil {
+			w.flushTicker.Stop()
+		}
+		w.wg.Wait()
+		w.Flush() // Final flush
+	})
 }
 
 // WriteMoneyFlow adds a money flow row to the batch
@@ -375,28 +390,32 @@ func FlushClickHouse() error {
 	return chBatchWriter.Flush()
 }
 
+var closeClickHouseOnce sync.Once
+
 // CloseClickHouse closes ClickHouse connection
 func CloseClickHouse() {
-	if chBatchWriter != nil {
-		// Flush all pending batches before stopping
-		log.Println("Flushing all pending ClickHouse batches...")
-		if err := chBatchWriter.Flush(); err != nil {
-			log.Printf("Error flushing ClickHouse batches: %v", err)
+	closeClickHouseOnce.Do(func() {
+		if chBatchWriter != nil {
+			// Flush all pending batches before stopping
+			log.Println("Flushing all pending ClickHouse batches...")
+			if err := chBatchWriter.Flush(); err != nil {
+				log.Printf("Error flushing ClickHouse batches: %v", err)
+			}
+
+			log.Println("Stopping ClickHouse batch writer...")
+			chBatchWriter.Stop()
+			log.Println("ClickHouse batch writer stopped")
 		}
 
-		log.Println("Stopping ClickHouse batch writer...")
-		chBatchWriter.Stop()
-		log.Println("ClickHouse batch writer stopped")
-	}
-
-	if ClickHouseConn != nil {
-		log.Println("Closing ClickHouse connection...")
-		if err := ClickHouseConn.Close(); err != nil {
-			log.Printf("Error closing ClickHouse connection: %v", err)
-		} else {
-			log.Println("ClickHouse connection closed")
+		if ClickHouseConn != nil {
+			log.Println("Closing ClickHouse connection...")
+			if err := ClickHouseConn.Close(); err != nil {
+				log.Printf("Error closing ClickHouse connection: %v", err)
+			} else {
+				log.Println("ClickHouse connection closed")
+			}
 		}
-	}
+	})
 }
 
 // WriteLedgerToClickHouse writes ledger data directly to ClickHouse (if needed in future)
@@ -413,5 +432,37 @@ func WriteTransactionToClickHouse(txJSON []byte) error {
 	// Transactions are processed by consumers and converted to money flows
 	// Direct transaction writes are not needed as they go through the consumer pipeline
 	logger.Log.Debug().Msg("WriteTransactionToClickHouse called (not implemented)")
+	return nil
+}
+
+// RecordEmptyLedger records a ledger that has no Payment transactions
+func RecordEmptyLedger(ledgerIndex uint32, closeTimeUnix int64, totalTransactions uint32) error {
+	if ClickHouseConn == nil {
+		return fmt.Errorf("ClickHouse connection not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Convert close_time from Ripple epoch to Unix timestamp
+	const rippleToUnix int64 = 946684800
+	closeTime := time.Unix(closeTimeUnix+rippleToUnix, 0).UTC()
+
+	query := `
+		INSERT INTO xrpl.empty_ledgers 
+		(ledger_index, close_time, total_transactions, checked_at, version)
+		VALUES (?, ?, ?, now64(), now64())
+	`
+
+	err := ClickHouseConn.Exec(ctx, query,
+		ledgerIndex,
+		closeTime,
+		totalTransactions,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to insert empty ledger: %w", err)
+	}
+
 	return nil
 }

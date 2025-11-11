@@ -24,6 +24,27 @@ SETTINGS
 -- ============================
 
 -- ============================
+-- Empty Ledgers (леджеры без Payment транзакций)
+-- ============================
+CREATE TABLE IF NOT EXISTS xrpl.empty_ledgers
+(
+  ledger_index UInt32,
+  close_time DateTime64(3, 'UTC'),
+  total_transactions UInt32,
+  checked_at DateTime64(3, 'UTC') DEFAULT now64(),
+  version UInt64 DEFAULT now64()
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY ledger_index
+SETTINGS
+  index_granularity = 8192,
+  index_granularity_bytes = 10485760;
+
+-- Secondary index for empty ledgers
+ALTER TABLE xrpl.empty_ledgers ADD INDEX idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
+ALTER TABLE xrpl.empty_ledgers ADD INDEX idx_close_time (close_time) TYPE minmax GRANULARITY 4;
+
+-- ============================
 -- Money Flow (объединенная таблица с данными транзакций)
 -- ============================
 CREATE TABLE IF NOT EXISTS xrpl.money_flow
