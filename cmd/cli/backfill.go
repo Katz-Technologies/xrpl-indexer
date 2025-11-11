@@ -5,7 +5,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/segmentio/kafka-go"
 	"github.com/xrpscan/platform/config"
 	"github.com/xrpscan/platform/connections"
 	"github.com/xrpscan/platform/consumers"
@@ -93,14 +91,6 @@ func (cmd *BackfillCommand) Run() error {
 	log.Printf("[BACKFILL] Using XRPL server: %s", cmd.fXrplServer)
 	log.Printf("[BACKFILL] Minimum delay between requests: %dms", cmd.fMinDelay)
 
-	log.Printf("[BACKFILL] Initializing Kafka writer...")
-	connections.NewWriter()
-	log.Printf("[BACKFILL] Kafka writer initialized successfully")
-
-	log.Printf("[BACKFILL] Initializing Kafka readers...")
-	connections.NewReaders()
-	log.Printf("[BACKFILL] Kafka readers initialized successfully")
-
 	log.Printf("[BACKFILL] Initializing ClickHouse connection...")
 	connections.NewClickHouseConnection()
 	log.Printf("[BACKFILL] ClickHouse connection initialized successfully")
@@ -113,14 +103,7 @@ func (cmd *BackfillCommand) Run() error {
 	connections.NewXrplRPCClientWithURL(cmd.fXrplServer)
 	log.Printf("[BACKFILL] XRPL RPC client initialized successfully")
 
-	log.Printf("[BACKFILL] Starting consumers to process data for ClickHouse...")
-	go consumers.RunConsumers()
-	log.Printf("[BACKFILL] Consumers started successfully")
-
-	// Give consumers time to initialize
-	log.Printf("[BACKFILL] Waiting for consumers to initialize...")
-	time.Sleep(2 * time.Second)
-	log.Printf("[BACKFILL] Consumers initialization complete")
+	// Consumers are no longer needed - transactions are processed directly
 
 	defer func() {
 		log.Printf("[BACKFILL] Closing remaining connections...")
@@ -151,24 +134,7 @@ func (cmd *BackfillCommand) Run() error {
 	}
 
 	log.Printf("[BACKFILL] Backfill process completed successfully")
-	
-	// Close Kafka writer first to prevent new messages
-	log.Printf("[BACKFILL] Closing Kafka writer to prevent new messages...")
-	connections.CloseWriter()
-	
-	// Wait a bit for any in-flight messages to be written to Kafka
-	time.Sleep(1 * time.Second)
-	
-	// Close Kafka readers to signal consumers that no more messages will arrive
-	// This will cause FetchMessage to return error and close the channel
-	log.Printf("[BACKFILL] Closing Kafka readers to signal end of messages...")
-	connections.CloseReaders()
-	
-	// Wait for consumers to process all messages from Kafka
-	// This will wait until all messages in the channel are processed
-	log.Printf("[BACKFILL] Waiting for all consumer messages to be processed...")
-	consumers.WaitForConsumersToFinish()
-	
+
 	// Flush all pending ClickHouse batches before closing connections
 	log.Printf("[BACKFILL] Flushing all ClickHouse batches...")
 	if err := connections.FlushClickHouse(); err != nil {
@@ -176,7 +142,7 @@ func (cmd *BackfillCommand) Run() error {
 	} else {
 		log.Printf("[BACKFILL] ClickHouse batches flushed successfully")
 	}
-	
+
 	return nil
 }
 
@@ -272,17 +238,7 @@ func (cmd *BackfillCommand) backfillLedgerWithRetry(ledgerIndex int) error {
 		return fmt.Errorf("failed to marshal ledger: %w", err)
 	}
 
-	// Try to produce ledger to Kafka
-	if cmd.fVerbose {
-		log.Printf("[BACKFILL] Producing ledger %d to Kafka...", ledgerIndex)
-	}
-	err = cmd.produceLedgerWithRetry(ledgerJSON)
-	if err != nil {
-		return fmt.Errorf("failed to produce ledger: %w", err)
-	}
-	if cmd.fVerbose {
-		log.Printf("[BACKFILL] Ledger %d produced to Kafka successfully", ledgerIndex)
-	}
+	// Ledger production to Kafka is no longer needed - transactions are processed directly
 
 	// Try to backfill transactions
 	if cmd.fVerbose {
@@ -302,53 +258,6 @@ func (cmd *BackfillCommand) backfillLedgerWithRetry(ledgerIndex int) error {
 	if cmd.fVerbose {
 		log.Printf("[BACKFILL] Transactions for ledger %d processed successfully in %v",
 			ledgerIndex, requestDuration)
-	}
-
-	return nil
-}
-
-// produceLedgerWithRetry attempts to produce ledger to Kafka with retry logic
-func (cmd *BackfillCommand) produceLedgerWithRetry(ledgerJSON []byte) error {
-	maxRetries := 3
-	retryDelay := time.Second
-
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		err := cmd.produceLedger(ledgerJSON)
-		if err == nil {
-			return nil // Success
-		}
-
-		log.Printf("[BACKFILL] Error producing ledger to Kafka (attempt %d/%d): %v",
-			attempt+1, maxRetries, err)
-
-		if attempt < maxRetries-1 {
-			log.Printf("[BACKFILL] Retrying ledger production in %v...", retryDelay)
-			time.Sleep(retryDelay)
-			retryDelay *= 2
-		}
-	}
-
-	return fmt.Errorf("failed to produce ledger after %d attempts", maxRetries)
-}
-
-// produceLedger produces a single ledger to Kafka
-func (cmd *BackfillCommand) produceLedger(ledgerJSON []byte) error {
-	var res map[string]interface{}
-	if err := json.Unmarshal(ledgerJSON, &res); err != nil {
-		return fmt.Errorf("failed to unmarshal ledger: %w", err)
-	}
-
-	messageKey := strconv.Itoa(int(res["ledger_index"].(float64)))
-
-	err := connections.KafkaWriter.WriteMessages(context.Background(),
-		kafka.Message{
-			Topic: config.TopicLedgers(),
-			Key:   []byte(messageKey),
-			Value: ledgerJSON,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("kafka write failed: %w", err)
 	}
 
 	return nil
@@ -429,53 +338,77 @@ func (cmd *BackfillCommand) backfillTransactions(ledgerJSON []byte) error {
 		return fmt.Errorf("ledger has invalid close_time property for ledger %d", ledger.LedgerIndex)
 	}
 
-	// Build a batch of kafka messages and write in one call
-	msgs := make([]kafka.Message, 0, len(txs))
+	// Process transactions directly and write to ClickHouse
+	processedCount := 0
+	skippedCount := 0
+	errorCount := 0
+
+	log.Printf("[BACKFILL] Processing %d transactions for ledger %d", len(txs), ledger.LedgerIndex)
+
 	for _, txo := range txs {
 		tx, ok := txo.(map[string]interface{})
 		if !ok {
 			return fmt.Errorf("error asserting transaction type for ledger %d", ledger.LedgerIndex)
 		}
 
-		// Transactions fetched by `ledger` command do not have date, validated and
+		// Transactions fetched by `ledger` command do not have date, validated,
 		// ledger_index fields. Populating these tx fields from ledger data.
-		tx["ledger_index"] = ledgerIndex
+		// Use float64 for ledger_index to match XRPL format
+		tx["ledger_index"] = float64(ledgerIndex)
 		tx["date"] = closeTime
 		tx["validated"] = true
 
 		var base map[string]interface{} = tx
 		hash, _ := base["hash"].(string)
 		if hash == "" {
-			// Skip malformed tx
+			skippedCount++
+			// Only log if detailed logging is enabled for this ledger
+			if config.ShouldLogDetailed(ledger.LedgerIndex) {
+				logger.Log.Debug().
+					Uint32("ledger_index", ledger.LedgerIndex).
+					Msg("Skipping transaction without hash")
+			}
 			continue
 		}
 
-		txJSON, err := json.Marshal(tx)
-		if err != nil {
-			return fmt.Errorf("error marshaling transaction for ledger %d: %w", ledger.LedgerIndex, err)
+		// Check transaction type before processing
+		txType, _ := base["TransactionType"].(string)
+		if txType != "Payment" {
+			skippedCount++
+			// Only log if detailed logging is enabled for this ledger
+			if cmd.fVerbose && config.ShouldLogDetailed(ledger.LedgerIndex) {
+				logger.Log.Debug().
+					Str("tx_hash", hash).
+					Uint32("ledger_index", ledger.LedgerIndex).
+					Str("transaction_type", txType).
+					Msg("Skipping non-Payment transaction")
+			}
+			continue
 		}
-		msgs = append(msgs, kafka.Message{
-			Topic: config.TopicTransactions(),
-			Key:   []byte(hash),
-			Value: txJSON,
-		})
+
+		// Process transaction directly and write to ClickHouse
+		if err := consumers.ProcessTransaction(tx); err != nil {
+			errorCount++
+			logger.Log.Error().
+				Err(err).
+				Str("tx_hash", hash).
+				Uint32("ledger_index", ledger.LedgerIndex).
+				Msg("Failed to process transaction")
+			// Continue processing other transactions even if one fails
+		} else {
+			processedCount++
+			// Only log if detailed logging is enabled for this ledger
+			if cmd.fVerbose && config.ShouldLogDetailed(ledger.LedgerIndex) {
+				logger.Log.Debug().
+					Str("tx_hash", hash).
+					Uint32("ledger_index", ledger.LedgerIndex).
+					Msg("Transaction processed successfully")
+			}
+		}
 	}
 
-	if len(msgs) > 0 {
-		if cmd.fVerbose {
-			log.Printf("[BACKFILL] Writing %d transactions to Kafka for ledger %d...", len(msgs), ledger.LedgerIndex)
-		}
-		if err := connections.KafkaWriter.WriteMessages(context.Background(), msgs...); err != nil {
-			return fmt.Errorf("failed to produce transaction batch for ledger %d: %w", ledger.LedgerIndex, err)
-		}
-		if cmd.fVerbose {
-			log.Printf("[BACKFILL] Successfully wrote %d transactions to Kafka for ledger %d", len(msgs), ledger.LedgerIndex)
-		}
-	} else {
-		if cmd.fVerbose {
-			log.Printf("[BACKFILL] No transactions found for ledger %d", ledger.LedgerIndex)
-		}
-	}
+	log.Printf("[BACKFILL] Ledger %d processing summary: total=%d, processed=%d, skipped=%d, errors=%d",
+		ledger.LedgerIndex, len(txs), processedCount, skippedCount, errorCount)
 
 	return nil
 }

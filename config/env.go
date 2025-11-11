@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/joho/godotenv"
 )
@@ -197,6 +199,47 @@ func EnvClickHouseBatchTimeoutMs() int {
 		return v
 	}
 	return 5000 // default 1 second
+}
+
+/*
+* Detailed logging settings
+ */
+
+var (
+	detailedLoggingLedgers     map[uint32]bool
+	detailedLoggingLedgersOnce sync.Once
+)
+
+// EnvDetailedLoggingLedgers returns a map of ledger indices that should be logged in detail
+// Reads from DETAILED_LOGGING_LEDGERS env variable (comma-separated list)
+// Example: DETAILED_LOGGING_LEDGERS=98900000,98900001,98900002
+func EnvDetailedLoggingLedgers() map[uint32]bool {
+	detailedLoggingLedgersOnce.Do(func() {
+		detailedLoggingLedgers = make(map[uint32]bool)
+		envValue := os.Getenv("DETAILED_LOGGING_LEDGERS")
+		if envValue == "" {
+			return
+		}
+
+		// Parse comma-separated list
+		parts := strings.Split(envValue, ",")
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if ledgerIndex, err := strconv.ParseUint(part, 10, 32); err == nil {
+				detailedLoggingLedgers[uint32(ledgerIndex)] = true
+			}
+		}
+	})
+	return detailedLoggingLedgers
+}
+
+// ShouldLogDetailed checks if a ledger index should be logged in detail
+func ShouldLogDetailed(ledgerIndex uint32) bool {
+	ledgers := EnvDetailedLoggingLedgers()
+	return ledgers[ledgerIndex]
 }
 
 // Removed: Elasticsearch settings are no longer used

@@ -1,27 +1,17 @@
 package producers
 
 import (
-	"context"
 	"encoding/json"
 	"strconv"
 
-	"github.com/segmentio/kafka-go"
-	"github.com/xrpscan/platform/config"
+	"github.com/xrpscan/platform/consumers"
 	"github.com/xrpscan/platform/logger"
 	"github.com/xrpscan/platform/models"
 	"github.com/xrpscan/xrpl-go"
 )
 
-/*
-* Produce multiple transactions from a given ledger_index.
-*
-* Verifies structure of `ledger` websocket command, iterates over `transactions`
-* slice, and calls ProduceTransaction for each transaction object.
-*
-* These transaction objects have slightly different structure, as compared to
-* transactions returned via `tx` and `account_tx` commands.
- */
-func ProduceTransactions(w *kafka.Writer, message []byte) {
+// ProcessTransactionsDirectly processes transactions from a ledger and writes directly to ClickHouse
+func ProcessTransactionsDirectly(message []byte) {
 	var ledger models.LedgerStream
 	if err := json.Unmarshal(message, &ledger); err != nil {
 		logger.Log.Error().Err(err).Msg("JSON Unmarshal error")
@@ -69,18 +59,18 @@ func ProduceTransactions(w *kafka.Writer, message []byte) {
 		return
 	}
 
-	// Build a batch of kafka messages and write in one call
-	msgs := make([]kafka.Message, 0, len(txs))
+	// Process transactions directly and write to ClickHouse
 	for _, txo := range txs {
 		tx, ok := txo.(map[string]interface{})
 		if !ok {
-			logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Err(err).Msg("Error asserting transaction type")
-			return
+			logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Msg("Error asserting transaction type")
+			continue
 		}
 
-		// Transactions fetched by `ledger` command do not have date, validated and
+		// Transactions fetched by `ledger` command do not have date, validated,
 		// ledger_index fields. Populating these tx fields from ledger data.
-		tx["ledger_index"] = ledgerIndex
+		// Use float64 for ledger_index to match XRPL format
+		tx["ledger_index"] = float64(ledgerIndex)
 		tx["date"] = closeTime
 		tx["validated"] = true
 
@@ -91,48 +81,10 @@ func ProduceTransactions(w *kafka.Writer, message []byte) {
 			continue
 		}
 
-		txJSON, err := json.Marshal(tx)
-		if err != nil {
-			logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Err(err).Msg("Error Marshaling transaction")
-			return
+		// Process transaction directly and write to ClickHouse
+		if err := consumers.ProcessTransaction(tx); err != nil {
+			logger.Log.Error().Err(err).Str("tx_hash", hash).Uint32("ledger_index", ledger.LedgerIndex).Msg("Failed to process transaction")
+			// Continue processing other transactions even if one fails
 		}
-		msgs = append(msgs, kafka.Message{
-			Topic: config.TopicTransactions(),
-			Key:   []byte(hash),
-			Value: txJSON,
-		})
-	}
-
-	if len(msgs) > 0 {
-		if err := w.WriteMessages(context.Background(), msgs...); err != nil {
-			logger.Log.Trace().Err(err).Msg("Failed to produce transaction batch")
-		}
-	}
-}
-
-/*
-* Submits transaction object to Kafka
- */
-func ProduceTransaction(w *kafka.Writer, message []byte) {
-	var res xrpl.BaseResponse
-	if err := json.Unmarshal(message, &res); err != nil {
-		return
-	}
-
-	messageKey, ok := res["hash"].(string)
-	if !ok {
-		logger.Log.Error().Msg("Tx object has no hash, aborting.")
-		return
-	}
-
-	err := w.WriteMessages(context.Background(),
-		kafka.Message{
-			Topic: config.TopicTransactions(),
-			Key:   []byte(messageKey),
-			Value: message,
-		},
-	)
-	if err != nil {
-		logger.Log.Trace().Err(err).Msg("Failed to produce transaction")
 	}
 }

@@ -1,7 +1,6 @@
 package consumers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -10,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/segmentio/kafka-go"
 	"github.com/shopspring/decimal"
+	"github.com/xrpscan/platform/config"
 	"github.com/xrpscan/platform/connections"
 	"github.com/xrpscan/platform/indexer"
 	"github.com/xrpscan/platform/logger"
@@ -113,49 +112,7 @@ func generateVersion() uint64 {
 	return uint64(time.Now().UnixNano())
 }
 
-func RunConsumer(conn *kafka.Reader, callback func(m kafka.Message)) {
-	ctx := context.Background()
-	for {
-		m, err := conn.FetchMessage(ctx)
-		if err != nil {
-			break
-		}
-		callback(m)
-
-		if err := conn.CommitMessages(ctx, m); err != nil {
-			logger.Log.Error().Err(err).Msg("Failed to commit kafka message")
-		}
-	}
-}
-
-func RunBulkConsumer(conn *kafka.Reader, callback func(<-chan kafka.Message)) {
-	ctx := context.Background()
-	ch := make(chan kafka.Message)
-
-	// Start callback in goroutine
-	callbackDone := make(chan struct{})
-	go func() {
-		callback(ch)
-		close(callbackDone)
-	}()
-
-	// Read messages and send to channel
-	for {
-		m, err := conn.FetchMessage(ctx)
-		if err != nil {
-			// No more messages, close channel and wait for callback to finish
-			close(ch)
-			<-callbackDone
-			break
-		}
-
-		ch <- m
-
-		if err := conn.CommitMessages(ctx, m); err != nil {
-			logger.Log.Error().Err(err).Msg("Failed to commit kafka message")
-		}
-	}
-}
+// RunConsumer and RunBulkConsumer have been removed - Kafka is no longer used
 
 func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 	var result []BalanceChange
@@ -977,216 +934,291 @@ func isWithinRange(val decimal.Decimal) bool {
 	return true
 }
 
+// ProcessTransaction processes a transaction map and writes money flows directly to ClickHouse
+// This function can be called directly without Kafka
+func ProcessTransaction(tx map[string]interface{}) error {
+	var hash string
+	if h, ok := tx["hash"].(string); ok {
+		hash = h
+	}
+
+	// Check transaction type
+	if tt, ok := tx["TransactionType"].(string); ok {
+		if tt != "Payment" {
+			// Only log if detailed logging is enabled (will check ledger_index later)
+			return nil // Skip non-Payment transactions
+		}
+	} else {
+		// Only log if detailed logging is enabled (will check ledger_index later)
+		return nil // Skip transactions without type
+	}
+
+	modified, err := indexer.ModifyTransaction(tx)
+	if err != nil {
+		logger.Log.Error().Err(err).Msg("Error fixing transaction object")
+		return err
+	}
+
+	var base map[string]interface{} = modified
+	if h, ok := base["hash"].(string); ok {
+		hash = h
+	}
+
+	// Get ledger_index - it can be float64, int, or uint32
+	var ledgerIndex float64
+	if li, ok := base["ledger_index"].(float64); ok {
+		ledgerIndex = li
+	} else if li, ok := base["ledger_index"].(int); ok {
+		ledgerIndex = float64(li)
+	} else if li, ok := base["ledger_index"].(uint32); ok {
+		ledgerIndex = float64(li)
+	} else if li, ok := base["ledger_index"].(int64); ok {
+		ledgerIndex = float64(li)
+	} else {
+		logger.Log.Error().
+			Str("tx_hash", hash).
+			Interface("ledger_index_type", base["ledger_index"]).
+			Msg("Failed to extract ledger_index from transaction")
+		return fmt.Errorf("failed to extract ledger_index from transaction")
+	}
+
+	closeTime, _ := base["date"].(float64)
+	inLedgerIndex := float64(0)
+
+	// Check transaction result and get TransactionIndex from meta
+	hasMeta := false
+	if meta, ok := base["meta"].(map[string]interface{}); ok {
+		hasMeta = true
+		if r, ok := meta["TransactionResult"].(string); ok {
+			if r != "tesSUCCESS" {
+				// Only log if detailed logging is enabled for this ledger
+				if config.ShouldLogDetailed(uint32(ledgerIndex)) {
+					logger.Log.Debug().
+						Str("tx_hash", hash).
+						Uint32("ledger_index", uint32(ledgerIndex)).
+						Str("transaction_result", r).
+						Msg("Skipping failed transaction")
+				}
+				return nil // Skip failed transactions
+			}
+		}
+		if ti, ok := meta["TransactionIndex"].(float64); ok {
+			inLedgerIndex = ti
+		}
+	}
+
+	// Only log detailed info if enabled for this ledger
+	shouldLog := config.ShouldLogDetailed(uint32(ledgerIndex))
+	if shouldLog {
+		logger.Log.Debug().
+			Str("tx_hash", hash).
+			Uint32("ledger_index", uint32(ledgerIndex)).
+			Uint32("in_ledger_index", uint32(inLedgerIndex)).
+			Bool("has_meta", hasMeta).
+			Msg("Processing Payment transaction")
+	}
+	feeDrops := uint64(0)
+	switch v := base["Fee"].(type) {
+	case float64:
+		feeDrops = uint64(v)
+	case int64:
+		feeDrops = uint64(v)
+	case int:
+		feeDrops = uint64(v)
+	case string:
+		if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
+			feeDrops = parsed
+		}
+	case json.Number:
+		if parsed, err := v.Int64(); err == nil {
+			feeDrops = uint64(parsed)
+		}
+	}
+
+	const rippleToUnix int64 = 946684800
+	closeTimeUnix := int64(closeTime) + rippleToUnix
+
+	changes := ExtractBalanceChanges(base)
+	actions := BuildActionGroups(base, changes)
+
+	// Only log detailed info if enabled for this ledger
+	if shouldLog {
+		logger.Log.Debug().
+			Str("tx_hash", hash).
+			Uint32("ledger_index", uint32(ledgerIndex)).
+			Int("balance_changes_count", len(changes)).
+			Int("actions_count", len(actions)).
+			Msg("Extracted balance changes and built action groups")
+	}
+
+	rowsWritten := 0
+	for _, action := range actions {
+		if len(action.Sides) == 0 {
+			continue
+		}
+
+		var fromSide, toSide Side
+		var kind string
+
+		switch action.Kind {
+		case ActFee:
+			fromSide = action.Sides[0]
+			toSide = Side{
+				Account:     "",
+				Currency:    "XRP",
+				Issuer:      "XRP",
+				Amount:      decimal.Zero,
+				InitBalance: decimal.Zero,
+			}
+			kind = "fee"
+		case ActBurn:
+			fromSide = action.Sides[0]
+			toSide = Side{
+				Account:     "",
+				Currency:    fromSide.Currency,
+				Issuer:      fromSide.Issuer,
+				Amount:      decimal.Zero,
+				InitBalance: decimal.Zero,
+			}
+			kind = "burn"
+		case ActPayout:
+			toSide = action.Sides[0]
+			fromSide = Side{
+				Account:     "",
+				Currency:    toSide.Currency,
+				Issuer:      toSide.Issuer,
+				Amount:      decimal.Zero,
+				InitBalance: decimal.Zero,
+			}
+			kind = "payout"
+		case ActLoss:
+			fromSide = action.Sides[0]
+			toSide = Side{
+				Account:     "",
+				Currency:    fromSide.Currency,
+				Issuer:      fromSide.Issuer,
+				Amount:      decimal.Zero,
+				InitBalance: decimal.Zero,
+			}
+			kind = "loss"
+		case ActSwap, ActDexOffer:
+			if len(action.Sides) >= 2 {
+				fromSide = action.Sides[0]
+				toSide = action.Sides[1]
+				if action.Kind == ActSwap {
+					kind = "swap"
+				} else {
+					kind = "dexOffer"
+				}
+			} else {
+				continue
+			}
+		case ActTransfer:
+			if len(action.Sides) >= 2 {
+				fromSide = action.Sides[0]
+				toSide = action.Sides[1]
+				kind = "transfer"
+			} else {
+				continue
+			}
+		default:
+			continue
+		}
+
+		var rate decimal.Decimal = decimal.Zero
+		if (action.Kind == ActSwap || action.Kind == ActDexOffer) && !toSide.Amount.IsZero() {
+			rate = fromSide.Amount.Abs().Div(toSide.Amount.Abs())
+		} else {
+			rate = decimal.NewFromInt(1)
+		}
+
+		if fromSide.Account == BLACKLIST_ACCOUNT_ROGUE {
+			continue
+		}
+		if toSide.Account == BLACKLIST_ACCOUNT_ROGUE {
+			continue
+		}
+
+		row := models.CHMoneyFlowRow{
+			TxHash:            hash,
+			LedgerIndex:       uint32(ledgerIndex),
+			InLedgerIndex:     uint32(inLedgerIndex),
+			CloseTimeUnix:     closeTimeUnix,
+			FeeDrops:          feeDrops,
+			FromAddress:       fromSide.Account,
+			ToAddress:         toSide.Account,
+			FromCurrency:      fromSide.Currency,
+			FromIssuerAddress: fixIssuerForXRP(fromSide.Currency, fromSide.Issuer),
+			ToCurrency:        toSide.Currency,
+			ToIssuerAddress:   fixIssuerForXRP(toSide.Currency, toSide.Issuer),
+			FromAmount:        fromSide.Amount.String(),
+			ToAmount:          toSide.Amount.String(),
+			InitFromAmount:    fromSide.InitBalance.String(),
+			InitToAmount:      toSide.InitBalance.String(),
+			Quote:             rate.String(),
+			Kind:              kind,
+			Version:           generateVersion(),
+		}
+
+		// Write directly to ClickHouse
+		if err := connections.WriteMoneyFlowRow(
+			row.TxHash,
+			row.LedgerIndex,
+			row.InLedgerIndex,
+			row.CloseTimeUnix,
+			row.FeeDrops,
+			row.FromAddress,
+			row.ToAddress,
+			row.FromCurrency,
+			row.FromIssuerAddress,
+			row.ToCurrency,
+			row.ToIssuerAddress,
+			row.FromAmount,
+			row.ToAmount,
+			row.InitFromAmount,
+			row.InitToAmount,
+			row.Quote,
+			row.Kind,
+			row.Version,
+		); err != nil {
+			logger.Log.Error().
+				Err(err).
+				Str("tx_hash", hash).
+				Uint32("ledger_index", row.LedgerIndex).
+				Str("kind", row.Kind).
+				Msg("Failed to write money flow row to ClickHouse")
+			return err
+		}
+		rowsWritten++
+	}
+
+	// Only log detailed info if enabled for this ledger
+	if shouldLog {
+		if rowsWritten > 0 {
+			logger.Log.Debug().
+				Str("tx_hash", hash).
+				Uint32("ledger_index", uint32(ledgerIndex)).
+				Int("rows_written", rowsWritten).
+				Msg("Successfully wrote money flow rows to ClickHouse batch")
+		} else {
+			logger.Log.Debug().
+				Str("tx_hash", hash).
+				Uint32("ledger_index", uint32(ledgerIndex)).
+				Int("actions_count", len(actions)).
+				Msg("No money flow rows written (all actions were skipped)")
+		}
+	}
+
+	return nil
+}
+
 func RunConsumers() {
 	consumerWgMutex.Lock()
 	consumerActive = true
 	consumerWgMutex.Unlock()
 
-	go RunBulkConsumer(connections.KafkaReaderTransaction, func(ch <-chan kafka.Message) {
-		for {
-			m, ok := <-ch
-			if !ok {
-				// Channel closed, no more messages
-				break
-			}
-
-			// Track message processing
-			consumerWg.Add(1)
-			go func(msg kafka.Message) {
-				defer consumerWg.Done()
-				var tx map[string]interface{}
-				if err := json.Unmarshal(msg.Value, &tx); err != nil {
-					logger.Log.Error().Err(err).Msg("Transaction json.Unmarshal error")
-					return
-				}
-				if tt, ok := tx["TransactionType"].(string); ok {
-					if tt != "Payment" {
-						return
-					}
-				} else {
-					return
-				}
-
-				modified, err := indexer.ModifyTransaction(tx)
-				if err != nil {
-					logger.Log.Error().Err(err).Msg("Error fixing transaction object")
-					return
-				}
-
-				var base map[string]interface{} = modified
-				hash, _ := base["hash"].(string)
-				ledgerIndex, _ := base["ledger_index"].(float64)
-				closeTime, _ := base["date"].(float64)
-				inLedgerIndex := float64(0)
-				if meta, ok := base["meta"].(map[string]interface{}); ok {
-					if r, ok := meta["TransactionResult"].(string); ok {
-						if r != "tesSUCCESS" {
-							return
-						}
-					}
-					if ti, ok := meta["TransactionIndex"].(float64); ok {
-						inLedgerIndex = ti
-					}
-				}
-				feeDrops := uint64(0)
-				switch v := base["Fee"].(type) {
-				case float64:
-					feeDrops = uint64(v)
-				case int64:
-					feeDrops = uint64(v)
-				case int:
-					feeDrops = uint64(v)
-				case string:
-					if parsed, err := strconv.ParseUint(v, 10, 64); err == nil {
-						feeDrops = parsed
-					}
-				case json.Number:
-					if parsed, err := v.Int64(); err == nil {
-						feeDrops = uint64(parsed)
-					}
-				}
-
-				const rippleToUnix int64 = 946684800
-				closeTimeUnix := int64(closeTime) + rippleToUnix
-
-				changes := ExtractBalanceChanges(base)
-				actions := BuildActionGroups(base, changes)
-
-				for _, action := range actions {
-					if len(action.Sides) == 0 {
-						continue
-					}
-
-					var fromSide, toSide Side
-					var kind string
-
-					switch action.Kind {
-					case ActFee:
-						fromSide = action.Sides[0]
-						toSide = Side{
-							Account:     "",
-							Currency:    "XRP",
-							Issuer:      "XRP",
-							Amount:      decimal.Zero,
-							InitBalance: decimal.Zero,
-						}
-						kind = "fee"
-					case ActBurn:
-						fromSide = action.Sides[0]
-						toSide = Side{
-							Account:     "",
-							Currency:    fromSide.Currency,
-							Issuer:      fromSide.Issuer,
-							Amount:      decimal.Zero,
-							InitBalance: decimal.Zero,
-						}
-						kind = "burn"
-					case ActPayout:
-						toSide = action.Sides[0]
-						fromSide = Side{
-							Account:     "",
-							Currency:    toSide.Currency,
-							Issuer:      toSide.Issuer,
-							Amount:      decimal.Zero,
-							InitBalance: decimal.Zero,
-						}
-						kind = "payout"
-					case ActLoss:
-						fromSide = action.Sides[0]
-						toSide = Side{
-							Account:     "",
-							Currency:    fromSide.Currency,
-							Issuer:      fromSide.Issuer,
-							Amount:      decimal.Zero,
-							InitBalance: decimal.Zero,
-						}
-						kind = "loss"
-					case ActSwap, ActDexOffer:
-						if len(action.Sides) >= 2 {
-							fromSide = action.Sides[0]
-							toSide = action.Sides[1]
-							if action.Kind == ActSwap {
-								kind = "swap"
-							} else {
-								kind = "dexOffer"
-							}
-						} else {
-							continue
-						}
-					case ActTransfer:
-						if len(action.Sides) >= 2 {
-							fromSide = action.Sides[0]
-							toSide = action.Sides[1]
-							kind = "transfer"
-						} else {
-							continue
-						}
-					default:
-						continue
-					}
-
-					var rate decimal.Decimal = decimal.Zero
-					if (action.Kind == ActSwap || action.Kind == ActDexOffer) && !toSide.Amount.IsZero() {
-						rate = fromSide.Amount.Abs().Div(toSide.Amount.Abs())
-					} else {
-						rate = decimal.NewFromInt(1)
-					}
-
-					if fromSide.Account == BLACKLIST_ACCOUNT_ROGUE {
-						continue
-					}
-					if toSide.Account == BLACKLIST_ACCOUNT_ROGUE {
-						continue
-					}
-
-					row := models.CHMoneyFlowRow{
-						TxHash:            hash,
-						LedgerIndex:       uint32(ledgerIndex),
-						InLedgerIndex:     uint32(inLedgerIndex),
-						CloseTimeUnix:     closeTimeUnix,
-						FeeDrops:          feeDrops,
-						FromAddress:       fromSide.Account,
-						ToAddress:         toSide.Account,
-						FromCurrency:      fromSide.Currency,
-						FromIssuerAddress: fixIssuerForXRP(fromSide.Currency, fromSide.Issuer),
-						ToCurrency:        toSide.Currency,
-						ToIssuerAddress:   fixIssuerForXRP(toSide.Currency, toSide.Issuer),
-						FromAmount:        fromSide.Amount.String(),
-						ToAmount:          toSide.Amount.String(),
-						InitFromAmount:    fromSide.InitBalance.String(),
-						InitToAmount:      toSide.InitBalance.String(),
-						Quote:             rate.String(),
-						Kind:              kind,
-						Version:           generateVersion(),
-					}
-
-					// Write directly to ClickHouse instead of Kafka
-					if err := connections.WriteMoneyFlowRow(
-						row.TxHash,
-						row.LedgerIndex,
-						row.InLedgerIndex,
-						row.CloseTimeUnix,
-						row.FeeDrops,
-						row.FromAddress,
-						row.ToAddress,
-						row.FromCurrency,
-						row.FromIssuerAddress,
-						row.ToCurrency,
-						row.ToIssuerAddress,
-						row.FromAmount,
-						row.ToAmount,
-						row.InitFromAmount,
-						row.InitToAmount,
-						row.Quote,
-						row.Kind,
-						row.Version,
-					); err != nil {
-						logger.Log.Error().Err(err).Str("tx_hash", hash).Msg("Failed to write money flow row to ClickHouse")
-					}
-				}
-			}(m)
-		}
-	})
+	// Kafka consumers are no longer used - data is written directly to ClickHouse
+	// This function is kept for compatibility but does nothing
 }
 
 // WaitForConsumersToFinish waits for all consumer messages to be processed

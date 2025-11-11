@@ -188,47 +188,53 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 		return fmt.Errorf("failed to prepare batch: %w", err)
 	}
 
-		// Add rows to batch
-		for _, row := range batch {
-			// Convert close_time_unix to DateTime64
-			closeTime := time.Unix(row.CloseTimeUnix, 0).UTC()
+	// Group rows by ledger index for detailed logging
+	ledgerRowsMap := make(map[uint32][]MoneyFlowRow)
+	for _, row := range batch {
+		ledgerRowsMap[row.LedgerIndex] = append(ledgerRowsMap[row.LedgerIndex], row)
+	}
 
-			// For Enum8 in ClickHouse, we need to pass the string value directly
-			// ClickHouse will convert it to the corresponding enum value
-			kindValue := row.Kind
-			if kindValue == "" {
-				kindValue = "unknown"
-			}
+	// Add rows to batch
+	for _, row := range batch {
+		// Convert close_time_unix to DateTime64
+		closeTime := time.Unix(row.CloseTimeUnix, 0).UTC()
 
-			// Convert Decimal strings to proper Decimal types
-			// clickhouse-go accepts strings for Decimal and converts them automatically
-			// But we can also use decimal.Decimal if needed, for now strings should work
-			err := batchInsert.Append(
-				row.TxHash,
-				row.LedgerIndex,
-				row.InLedgerIndex,
-				closeTime,
-				row.FeeDrops,
-				row.FromAddress,
-				row.ToAddress,
-				row.FromCurrency,
-				row.FromIssuerAddress,
-				row.ToCurrency,
-				row.ToIssuerAddress,
-				row.FromAmount,        // Decimal(38,18) - string is accepted
-				row.ToAmount,          // Decimal(38,18) - string is accepted
-				row.InitFromAmount,    // Decimal(38,18) - string is accepted
-				row.InitToAmount,      // Decimal(38,18) - string is accepted
-				row.Quote,             // Decimal(38,18) - string is accepted
-				kindValue,             // Enum8 - string value is accepted
-				row.Version,
-			)
-			if err != nil {
-				logger.Log.Error().Err(err).Str("tx_hash", row.TxHash).Msg("Failed to append row to batch")
-				w.mu.Lock()
-				return fmt.Errorf("failed to append row: %w", err)
-			}
+		// For Enum8 in ClickHouse, we need to pass the string value directly
+		// ClickHouse will convert it to the corresponding enum value
+		kindValue := row.Kind
+		if kindValue == "" {
+			kindValue = "unknown"
 		}
+
+		// Convert Decimal strings to proper Decimal types
+		// clickhouse-go accepts strings for Decimal and converts them automatically
+		// But we can also use decimal.Decimal if needed, for now strings should work
+		err := batchInsert.Append(
+			row.TxHash,
+			row.LedgerIndex,
+			row.InLedgerIndex,
+			closeTime,
+			row.FeeDrops,
+			row.FromAddress,
+			row.ToAddress,
+			row.FromCurrency,
+			row.FromIssuerAddress,
+			row.ToCurrency,
+			row.ToIssuerAddress,
+			row.FromAmount,     // Decimal(38,18) - string is accepted
+			row.ToAmount,       // Decimal(38,18) - string is accepted
+			row.InitFromAmount, // Decimal(38,18) - string is accepted
+			row.InitToAmount,   // Decimal(38,18) - string is accepted
+			row.Quote,          // Decimal(38,18) - string is accepted
+			kindValue,          // Enum8 - string value is accepted
+			row.Version,
+		)
+		if err != nil {
+			logger.Log.Error().Err(err).Str("tx_hash", row.TxHash).Msg("Failed to append row to batch")
+			w.mu.Lock()
+			return fmt.Errorf("failed to append row: %w", err)
+		}
+	}
 
 	// Execute batch insert
 	if err := batchInsert.Send(); err != nil {
@@ -237,7 +243,55 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 		return fmt.Errorf("failed to send batch: %w", err)
 	}
 
-	logger.Log.Info().Int("batch_size", len(batch)).Msg("Successfully flushed batch to ClickHouse")
+	// Log summary of written rows grouped by ledger index
+	ledgerSummary := make(map[uint32]int)
+	for _, row := range batch {
+		ledgerSummary[row.LedgerIndex]++
+	}
+
+	logger.Log.Info().
+		Int("batch_size", len(batch)).
+		Interface("ledgers", ledgerSummary).
+		Msg("Successfully flushed batch to ClickHouse")
+
+	// Detailed logging for specific ledger indices
+	for ledgerIndex, rows := range ledgerRowsMap {
+		if config.ShouldLogDetailed(ledgerIndex) {
+			logger.Log.Info().
+				Uint32("ledger_index", ledgerIndex).
+				Int("rows_count", len(rows)).
+				Msg("=== Detailed logging for ledger ===")
+
+			for i, row := range rows {
+				logger.Log.Info().
+					Uint32("ledger_index", ledgerIndex).
+					Int("row_number", i+1).
+					Str("tx_hash", row.TxHash).
+					Uint32("in_ledger_index", row.InLedgerIndex).
+					Int64("close_time_unix", row.CloseTimeUnix).
+					Uint64("fee_drops", row.FeeDrops).
+					Str("from_address", row.FromAddress).
+					Str("to_address", row.ToAddress).
+					Str("from_currency", row.FromCurrency).
+					Str("from_issuer_address", row.FromIssuerAddress).
+					Str("to_currency", row.ToCurrency).
+					Str("to_issuer_address", row.ToIssuerAddress).
+					Str("from_amount", row.FromAmount).
+					Str("to_amount", row.ToAmount).
+					Str("init_from_amount", row.InitFromAmount).
+					Str("init_to_amount", row.InitToAmount).
+					Str("quote", row.Quote).
+					Str("kind", row.Kind).
+					Uint64("version", row.Version).
+					Msg("Money flow row written to database")
+			}
+
+			logger.Log.Info().
+				Uint32("ledger_index", ledgerIndex).
+				Int("total_rows", len(rows)).
+				Msg("=== End of detailed logging for ledger ===")
+		}
+	}
 	w.mu.Lock()
 	return nil
 }
@@ -289,6 +343,17 @@ func WriteMoneyFlowRow(
 		Version:           version,
 	}
 
+	// Only log trace info if detailed logging is enabled for this ledger
+	if config.ShouldLogDetailed(ledgerIndex) {
+		logger.Log.Trace().
+			Str("tx_hash", txHash).
+			Uint32("ledger_index", ledgerIndex).
+			Str("kind", kind).
+			Str("from_address", fromAddress).
+			Str("to_address", toAddress).
+			Msg("Adding money flow row to ClickHouse batch")
+	}
+
 	return chBatchWriter.WriteMoneyFlow(moneyFlowRow)
 }
 
@@ -300,13 +365,13 @@ func FlushClickHouse() error {
 	chBatchWriter.mu.Lock()
 	pendingCount := len(chBatchWriter.moneyFlowBatch)
 	chBatchWriter.mu.Unlock()
-	
+
 	if pendingCount > 0 {
 		logger.Log.Info().Int("pending_rows", pendingCount).Msg("Flushing pending ClickHouse batches")
 	} else {
 		logger.Log.Info().Msg("No pending ClickHouse batches to flush")
 	}
-	
+
 	return chBatchWriter.Flush()
 }
 
@@ -318,7 +383,7 @@ func CloseClickHouse() {
 		if err := chBatchWriter.Flush(); err != nil {
 			log.Printf("Error flushing ClickHouse batches: %v", err)
 		}
-		
+
 		log.Println("Stopping ClickHouse batch writer...")
 		chBatchWriter.Stop()
 		log.Println("ClickHouse batch writer stopped")
@@ -350,4 +415,3 @@ func WriteTransactionToClickHouse(txJSON []byte) error {
 	logger.Log.Debug().Msg("WriteTransactionToClickHouse called (not implemented)")
 	return nil
 }
-
