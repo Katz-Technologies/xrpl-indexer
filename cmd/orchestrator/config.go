@@ -33,7 +33,7 @@ func ParseConfig() (*Config, error) {
 	flag.BoolVar(&cfg.Verbose, "verbose", false, "Make the orchestrator more talkative")
 	flag.Int64Var(&cfg.MinDelay, "delay", 10, "Minimum delay (ms) between requests to XRPL server")
 	flag.StringVar(&cfg.LogFile, "log-file", "", "Path to orchestrator log file (default: stdout)")
-	flag.IntVar(&cfg.RedistributeThreshold, "redistribute-threshold", 1000, "If other workers have less than this many ledgers left, let them finish instead of stopping (0 = always stop and redistribute)")
+	flag.IntVar(&cfg.RedistributeThreshold, "redistribute-threshold", 5000, "If other workers have less than this many ledgers left, let them finish instead of stopping (0 = always stop and redistribute)")
 
 	serversStr := flag.String("servers", "wss://s1.ripple.com/,wss://s2.ripple.com/,wss://xrplcluster.com/",
 		"Comma-separated list of XRPL server URLs")
