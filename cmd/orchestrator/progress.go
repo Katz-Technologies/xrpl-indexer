@@ -288,7 +288,7 @@ func CountRemainingLedgers(fromLedger, toLedger int) (int, error) {
 		)
 	`, fromLedger, toLedger, fromLedger, toLedger)
 
-	var indexedCount *uint32
+	var indexedCount *uint64
 	err := connections.ClickHouseConn.QueryRow(ctx, query).Scan(&indexedCount)
 	if err != nil {
 		// If query fails (e.g., empty_ledgers table doesn't exist), try without it

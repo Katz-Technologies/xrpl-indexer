@@ -38,13 +38,15 @@ func getMinDelay(defaultDelay int64) int64 {
 }
 
 type BackfillCommand struct {
-	fs          *flag.FlagSet
-	fConfigFile string
-	fXrplServer string
-	fIndexFrom  int
-	fIndexTo    int
-	fMinDelay   int64
-	fVerbose    bool
+	fs           *flag.FlagSet
+	fConfigFile  string
+	fXrplServer  string
+	fIndexFrom   int
+	fIndexTo     int
+	fMinDelay    int64
+	fVerbose     bool
+	fLedgers     string // Comma-separated list of ledger indices to process
+	fLedgersFile string // Path to file containing ledger indices (one per line)
 }
 
 func NewBackfillCommand() *BackfillCommand {
@@ -58,6 +60,8 @@ func NewBackfillCommand() *BackfillCommand {
 	cmd.fs.BoolVar(&cmd.fVerbose, "verbose", false, "Make the command more talkative")
 	cmd.fs.StringVar(&cmd.fXrplServer, "server", "", "XRPL protocol compatible server to connect")
 	cmd.fs.Int64Var(&cmd.fMinDelay, "delay", getMinDelay(defaultMinDelay), "Minimum delay (ms) between requests to XRPL server (can be overridden by BACKFILL_MIN_DELAY_MS env var)")
+	cmd.fs.StringVar(&cmd.fLedgers, "ledgers", "", "Comma-separated list of ledger indices to process (overrides --from and --to)")
+	cmd.fs.StringVar(&cmd.fLedgersFile, "ledgers-file", "", "Path to file containing ledger indices to process, one per line (overrides --from and --to)")
 	return cmd
 }
 
@@ -71,6 +75,11 @@ func (cmd *BackfillCommand) Init(args []string) error {
 }
 
 func (cmd *BackfillCommand) Validate() error {
+	// If ledgers list or file is provided, --from and --to are ignored
+	if cmd.fLedgers != "" || cmd.fLedgersFile != "" {
+		return nil
+	}
+
 	// Ledgers are backfilled in chronological order. Therefore, --from ledger
 	// index must be less than --to ledger index.
 	if cmd.fIndexFrom > cmd.fIndexTo {
@@ -81,6 +90,47 @@ func (cmd *BackfillCommand) Validate() error {
 
 func (cmd *BackfillCommand) Name() string {
 	return cmd.fs.Name()
+}
+
+// parseLedgersList parses a comma-separated list of ledger indices
+func (cmd *BackfillCommand) parseLedgersList(ledgersStr string) ([]int, error) {
+	parts := strings.Split(ledgersStr, ",")
+	ledgers := make([]int, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		ledgerIndex, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ledger index '%s': %w", part, err)
+		}
+		ledgers = append(ledgers, ledgerIndex)
+	}
+	return ledgers, nil
+}
+
+// parseLedgersFile reads ledger indices from a file (one per line)
+func (cmd *BackfillCommand) parseLedgersFile(filePath string) ([]int, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read ledgers file: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	ledgers := make([]int, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue // Skip empty lines and comments
+		}
+		ledgerIndex, err := strconv.Atoi(line)
+		if err != nil {
+			return nil, fmt.Errorf("invalid ledger index '%s' in file: %w", line, err)
+		}
+		ledgers = append(ledgers, ledgerIndex)
+	}
+	return ledgers, nil
 }
 
 func (cmd *BackfillCommand) Run() error {
@@ -98,7 +148,30 @@ func (cmd *BackfillCommand) Run() error {
 	// Initialize connections to services
 	logger.New()
 
-	log.Printf("[BACKFILL] Starting backfill process from ledger %d to %d", cmd.fIndexFrom, cmd.fIndexTo)
+	// Parse ledger list if provided
+	var ledgersToProcess []int
+	var useLedgerList bool
+
+	if cmd.fLedgersFile != "" {
+		var err error
+		ledgersToProcess, err = cmd.parseLedgersFile(cmd.fLedgersFile)
+		if err != nil {
+			return fmt.Errorf("failed to parse ledgers file: %w", err)
+		}
+		useLedgerList = true
+		log.Printf("[BACKFILL] Loaded %d ledgers from file: %s", len(ledgersToProcess), cmd.fLedgersFile)
+	} else if cmd.fLedgers != "" {
+		var err error
+		ledgersToProcess, err = cmd.parseLedgersList(cmd.fLedgers)
+		if err != nil {
+			return fmt.Errorf("failed to parse ledgers list: %w", err)
+		}
+		useLedgerList = true
+		log.Printf("[BACKFILL] Processing %d ledgers from list", len(ledgersToProcess))
+	} else {
+		log.Printf("[BACKFILL] Starting backfill process from ledger %d to %d", cmd.fIndexFrom, cmd.fIndexTo)
+	}
+
 	log.Printf("[BACKFILL] Using XRPL server: %s", cmd.fXrplServer)
 	log.Printf("[BACKFILL] Minimum delay between requests: %dms", cmd.fMinDelay)
 
@@ -125,23 +198,44 @@ func (cmd *BackfillCommand) Run() error {
 		log.Printf("[BACKFILL] All connections closed")
 	}()
 
-	// Fetch ledger and queue transactions for indexing
-	totalLedgers := cmd.fIndexTo - cmd.fIndexFrom + 1
-	log.Printf("[BACKFILL] Processing %d ledgers total", totalLedgers)
-	log.Printf("[BACKFILL] Starting sequential backfill process - will retry each ledger until success")
+	// Process ledgers
+	var totalLedgers int
+	if useLedgerList {
+		totalLedgers = len(ledgersToProcess)
+		log.Printf("[BACKFILL] Processing %d ledgers from list", totalLedgers)
+		log.Printf("[BACKFILL] Starting sequential backfill process - will retry each ledger until success")
 
-	// Sequential processing loop - no skipping allowed
-	for ledgerIndex := cmd.fIndexFrom; ledgerIndex <= cmd.fIndexTo; ledgerIndex++ {
-		progress := float64(ledgerIndex-cmd.fIndexFrom+1) / float64(totalLedgers) * 100
+		for i, ledgerIndex := range ledgersToProcess {
+			progress := float64(i+1) / float64(totalLedgers) * 100
 
-		// Log progress every 100 ledgers or for first/last ledger
-		if ledgerIndex == cmd.fIndexFrom || ledgerIndex == cmd.fIndexTo || ledgerIndex%100 == 0 {
-			log.Printf("[BACKFILL] Progress: %.1f%% (%d/%d) - Processing ledger %d",
-				progress, ledgerIndex-cmd.fIndexFrom+1, totalLedgers, ledgerIndex)
+			// Log progress every 100 ledgers or for first/last ledger
+			if i == 0 || i == totalLedgers-1 || (i+1)%100 == 0 {
+				log.Printf("[BACKFILL] Progress: %.1f%% (%d/%d) - Processing ledger %d",
+					progress, i+1, totalLedgers, ledgerIndex)
+			}
+
+			// Process ledger with infinite retry until success
+			cmd.processLedgerWithInfiniteRetry(ledgerIndex)
 		}
+	} else {
+		// Fetch ledger and queue transactions for indexing
+		totalLedgers = cmd.fIndexTo - cmd.fIndexFrom + 1
+		log.Printf("[BACKFILL] Processing %d ledgers total", totalLedgers)
+		log.Printf("[BACKFILL] Starting sequential backfill process - will retry each ledger until success")
 
-		// Process ledger with infinite retry until success
-		cmd.processLedgerWithInfiniteRetry(ledgerIndex)
+		// Sequential processing loop - no skipping allowed
+		for ledgerIndex := cmd.fIndexFrom; ledgerIndex <= cmd.fIndexTo; ledgerIndex++ {
+			progress := float64(ledgerIndex-cmd.fIndexFrom+1) / float64(totalLedgers) * 100
+
+			// Log progress every 100 ledgers or for first/last ledger
+			if ledgerIndex == cmd.fIndexFrom || ledgerIndex == cmd.fIndexTo || ledgerIndex%100 == 0 {
+				log.Printf("[BACKFILL] Progress: %.1f%% (%d/%d) - Processing ledger %d",
+					progress, ledgerIndex-cmd.fIndexFrom+1, totalLedgers, ledgerIndex)
+			}
+
+			// Process ledger with infinite retry until success
+			cmd.processLedgerWithInfiniteRetry(ledgerIndex)
+		}
 	}
 
 	log.Printf("[BACKFILL] Backfill process completed successfully")

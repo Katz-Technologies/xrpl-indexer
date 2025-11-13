@@ -35,7 +35,7 @@ const (
 	WorkerStatusFailed    WorkerStatus = "failed"
 )
 
-func NewWorker(id int, fromLedger, toLedger int, server, cliPath, configFile string, verbose bool, minDelay int64) (*Worker, error) {
+func NewWorker(id int, fromLedger, toLedger int, ledgers []int, server, cliPath, configFile string, verbose bool, minDelay int64) (*Worker, error) {
 	// Check if there's a worker-specific delay override via environment variable
 	// Format: BACKFILL_MIN_DELAY_MS_WORKER_1, BACKFILL_MIN_DELAY_MS_WORKER_2, etc.
 	workerDelayEnv := fmt.Sprintf("BACKFILL_MIN_DELAY_MS_WORKER_%d", id)
@@ -56,12 +56,45 @@ func NewWorker(id int, fromLedger, toLedger int, server, cliPath, configFile str
 	// Build command
 	args := []string{
 		"backfill",
-		"-from", fmt.Sprintf("%d", fromLedger),
-		"-to", fmt.Sprintf("%d", toLedger),
 		"-server", server,
 		"-config", configFile,
 		"-delay", fmt.Sprintf("%d", minDelay),
 	}
+
+	// If ledgers list is provided, use it; otherwise use from/to range
+	if len(ledgers) > 0 {
+		// For large lists (>1000), use file; otherwise use command line argument
+		if len(ledgers) > 1000 {
+			// Save to file
+			ledgersFile := fmt.Sprintf("logs/orchestrator-worker-%d-ledgers.txt", id)
+			file, err := os.Create(ledgersFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create ledgers file: %w", err)
+			}
+			for _, ledger := range ledgers {
+				fmt.Fprintf(file, "%d\n", ledger)
+			}
+			file.Close()
+			args = append(args, "-ledgers-file", ledgersFile)
+			log.Printf("[WORKER-%d] Using ledgers file with %d ledgers: %s", id, len(ledgers), ledgersFile)
+		} else {
+			// Use command line argument
+			ledgersStr := ""
+			for i, ledger := range ledgers {
+				if i > 0 {
+					ledgersStr += ","
+				}
+				ledgersStr += fmt.Sprintf("%d", ledger)
+			}
+			args = append(args, "-ledgers", ledgersStr)
+			log.Printf("[WORKER-%d] Using ledgers list with %d ledgers", id, len(ledgers))
+		}
+	} else {
+		// Fallback to from/to range
+		args = append(args, "-from", fmt.Sprintf("%d", fromLedger))
+		args = append(args, "-to", fmt.Sprintf("%d", toLedger))
+	}
+
 	if verbose {
 		args = append(args, "-verbose")
 	}

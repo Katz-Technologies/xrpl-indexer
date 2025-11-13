@@ -289,36 +289,58 @@ func (o *Orchestrator) startWorkers() error {
 	log.Printf("[ORCHESTRATOR] Starting %d workers for range %d-%d",
 		o.config.Workers, o.currentFrom, o.currentTo)
 
-	// Calculate remaining range
-	remainingFrom, remainingTo, err := o.progressTracker.GetRemainingRange()
+	// Find gaps in the current range
+	gaps, err := o.progressTracker.FindGaps()
 	if err != nil {
-		return fmt.Errorf("failed to get remaining range: %w", err)
+		return fmt.Errorf("failed to find gaps: %w", err)
 	}
 
-	if remainingFrom > remainingTo {
+	if len(gaps) == 0 {
 		log.Printf("[ORCHESTRATOR] All ledgers in current range are indexed")
 		o.currentFrom = o.currentTo + 1
 		return nil
 	}
 
-	// Update current range
-	o.currentFrom = remainingFrom
-	o.currentTo = remainingTo
+	log.Printf("[ORCHESTRATOR] Found %d gaps to process", len(gaps))
 
-	// Split range into N parts
-	ranges := SplitRange(remainingFrom, remainingTo, o.config.Workers)
-	log.Printf("[ORCHESTRATOR] Split range into %d parts: %v", len(ranges), ranges)
+	// Limit number of workers to the number of gaps
+	numWorkers := o.config.Workers
+	if len(gaps) < numWorkers {
+		numWorkers = len(gaps)
+		log.Printf("[ORCHESTRATOR] Limiting workers to %d (only %d gaps found)",
+			numWorkers, len(gaps))
+	}
+
+	// Split gaps into N parts for workers
+	gapsPerWorker := len(gaps) / numWorkers
+	remainder := len(gaps) % numWorkers
 
 	// Create and start workers
-	o.workers = make([]*Worker, 0, len(ranges))
-	for i, r := range ranges {
+	o.workers = make([]*Worker, 0, numWorkers)
+	gapIdx := 0
+	for i := 0; i < numWorkers; i++ {
+		// Calculate how many gaps this worker should process
+		workerGapCount := gapsPerWorker
+		if i < remainder {
+			workerGapCount++
+		}
+
+		// Extract gaps for this worker
+		workerGaps := gaps[gapIdx : gapIdx+workerGapCount]
+		gapIdx += workerGapCount
+
+		// Calculate from/to for logging (first and last gap)
+		fromLedger := workerGaps[0]
+		toLedger := workerGaps[len(workerGaps)-1]
+
 		// Distribute servers using round-robin
 		server := o.config.Servers[i%len(o.config.Servers)]
 
 		worker, err := NewWorker(
 			i+1,
-			r.From,
-			r.To,
+			fromLedger,
+			toLedger,
+			workerGaps, // Pass the actual list of gaps
 			server,
 			o.config.CLIPath,
 			o.config.ConfigFile,
@@ -338,8 +360,8 @@ func (o *Orchestrator) startWorkers() error {
 		}
 
 		o.workers = append(o.workers, worker)
-		log.Printf("[ORCHESTRATOR] Started worker %d: range %d-%d on server %s",
-			worker.ID, r.From, r.To, server)
+		log.Printf("[ORCHESTRATOR] Started worker %d: %d gaps (range %d-%d) on server %s",
+			worker.ID, len(workerGaps), fromLedger, toLedger, server)
 	}
 
 	return nil
@@ -393,44 +415,60 @@ func (o *Orchestrator) fillGaps() error {
 
 	log.Printf("[ORCHESTRATOR] Found %d gaps, attempting to fill them", len(gaps))
 
-	// To ensure we always use o.config.Workers workers, we split all gaps
-	// into exactly o.config.Workers parts, regardless of how many gap ranges exist
-	// This ensures consistent parallelism
-	firstGap := gaps[0]
-	lastGap := gaps[len(gaps)-1]
+	// Split gaps into o.config.Workers parts
+	numWorkers := o.config.Workers
+	if len(gaps) < numWorkers {
+		numWorkers = len(gaps)
+		log.Printf("[ORCHESTRATOR] Limiting gap-filling workers to %d (only %d gaps found)",
+			numWorkers, len(gaps))
+	}
 
-	// Split the gap range into o.config.Workers parts
-	gapRanges := SplitRange(firstGap, lastGap, o.config.Workers)
-	log.Printf("[ORCHESTRATOR] Split %d gaps (range %d-%d) into %d parts for gap filling",
-		len(gaps), firstGap, lastGap, len(gapRanges))
+	gapsPerWorker := len(gaps) / numWorkers
+	remainder := len(gaps) % numWorkers
 
-	// Process gap ranges in parallel with exactly o.config.Workers workers
-	maxConcurrent := o.config.Workers
-	log.Printf("[ORCHESTRATOR] Will process %d gap ranges with %d workers",
-		len(gapRanges), maxConcurrent)
+	// Process gaps in parallel with exactly o.config.Workers workers
+	maxConcurrent := numWorkers
+	log.Printf("[ORCHESTRATOR] Will process %d gaps with %d workers",
+		len(gaps), maxConcurrent)
 
 	// Use a semaphore to limit concurrent gap filling
 	semaphore := make(chan struct{}, maxConcurrent)
-	results := make(chan error, len(gapRanges))
+	results := make(chan error, numWorkers)
 
-	for i, gapRange := range gapRanges {
-		go func(idx int, gr Range) {
+	gapIdx := 0
+	for i := 0; i < numWorkers; i++ {
+		// Calculate how many gaps this worker should process
+		workerGapCount := gapsPerWorker
+		if i < remainder {
+			workerGapCount++
+		}
+
+		// Extract gaps for this worker
+		workerGaps := gaps[gapIdx : gapIdx+workerGapCount]
+		gapIdx += workerGapCount
+
+		// Calculate from/to for logging (first and last gap)
+		fromLedger := workerGaps[0]
+		toLedger := workerGaps[len(workerGaps)-1]
+
+		go func(idx int, gapsList []int, from, to int) {
 			semaphore <- struct{}{}        // Acquire
 			defer func() { <-semaphore }() // Release
 
-			log.Printf("[ORCHESTRATOR] Processing gap range %d/%d: %d-%d",
-				idx+1, len(gapRanges), gr.From, gr.To)
+			log.Printf("[ORCHESTRATOR] Processing gap range %d/%d: %d gaps (range %d-%d)",
+				idx+1, numWorkers, len(gapsList), from, to)
 
 			// Use round-robin to select server
 			server := o.config.Servers[idx%len(o.config.Servers)]
 
-			// Create a temporary worker to fill this gap range
+			// Create a temporary worker to fill these gaps
 			// Use idx+1 for gap-filling workers (1, 2, 3...)
 			// This is safe because regular workers are stopped before gap filling
 			worker, err := NewWorker(
 				idx+1, // Gap-filling worker ID (1, 2, 3...)
-				gr.From,
-				gr.To,
+				from,
+				to,
+				gapsList, // Pass the actual list of gaps
 				server,
 				o.config.CLIPath,
 				o.config.ConfigFile,
@@ -462,14 +500,14 @@ func (o *Orchestrator) fillGaps() error {
 			select {
 			case err := <-done:
 				if err != nil {
-					log.Printf("[ORCHESTRATOR] Gap range %d-%d failed: %v", gr.From, gr.To, err)
+					log.Printf("[ORCHESTRATOR] Gap range %d-%d (%d gaps) failed: %v", from, to, len(gapsList), err)
 				} else {
-					log.Printf("[ORCHESTRATOR] Gap range %d-%d filled successfully", gr.From, gr.To)
+					log.Printf("[ORCHESTRATOR] Gap range %d-%d (%d gaps) filled successfully", from, to, len(gapsList))
 				}
 				results <- err
 			case <-time.After(timeout):
-				log.Printf("[ORCHESTRATOR] Gap range %d-%d timed out after %v, stopping",
-					gr.From, gr.To, timeout)
+				log.Printf("[ORCHESTRATOR] Gap range %d-%d (%d gaps) timed out after %v, stopping",
+					from, to, len(gapsList), timeout)
 				worker.Stop(false)
 				results <- fmt.Errorf("timeout")
 			}
@@ -477,14 +515,14 @@ func (o *Orchestrator) fillGaps() error {
 			// Cleanup
 			worker.Stop(false)
 			worker.Cleanup()
-		}(i, gapRange)
+		}(i, workerGaps, fromLedger, toLedger)
 	}
 
 	// Wait for all gap filling operations to complete
 	// We don't fail if some gaps fail - they might be intentionally skipped
 	successCount := 0
 	failCount := 0
-	for i := 0; i < len(gapRanges); i++ {
+	for i := 0; i < numWorkers; i++ {
 		err := <-results
 		if err == nil {
 			successCount++

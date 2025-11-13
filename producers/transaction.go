@@ -3,15 +3,19 @@ package producers
 import (
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/xrpscan/platform/consumers"
 	"github.com/xrpscan/platform/logger"
 	"github.com/xrpscan/platform/models"
+	"github.com/xrpscan/platform/socketio"
 	"github.com/xrpscan/xrpl-go"
 )
 
 // ProcessTransactionsDirectly processes transactions from a ledger and writes directly to ClickHouse
-func ProcessTransactionsDirectly(message []byte) {
+// isRealtime indicates if this is a real-time ledger (true) or backfill (false)
+// SocketIO events are only emitted for real-time transactions
+func ProcessTransactionsDirectly(message []byte, isRealtime bool) {
 	var ledger models.LedgerStream
 	if err := json.Unmarshal(message, &ledger); err != nil {
 		logger.Log.Error().Err(err).Msg("JSON Unmarshal error")
@@ -85,6 +89,18 @@ func ProcessTransactionsDirectly(message []byte) {
 		if err := consumers.ProcessTransaction(tx); err != nil {
 			logger.Log.Error().Err(err).Str("tx_hash", hash).Uint32("ledger_index", ledger.LedgerIndex).Msg("Failed to process transaction")
 			// Continue processing other transactions even if one fails
+		} else if isRealtime {
+			// Emit SocketIO event only for real-time transactions (NOT for backfill)
+			txType := ""
+			if tt, ok := tx["TransactionType"].(string); ok {
+				txType = tt
+			}
+			socketio.GetHub().EmitTransactionProcessed(socketio.TransactionProcessedEvent{
+				Hash:        hash,
+				LedgerIndex: ledger.LedgerIndex,
+				Type:        txType,
+				Timestamp:   time.Now().Unix(),
+			})
 		}
 	}
 }

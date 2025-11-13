@@ -10,6 +10,7 @@ import (
 	"github.com/xrpscan/platform/producers"
 	"github.com/xrpscan/platform/routes"
 	"github.com/xrpscan/platform/signals"
+	"github.com/xrpscan/platform/socketio"
 )
 
 func main() {
@@ -19,6 +20,9 @@ func main() {
 	connections.NewClickHouseConnection()
 	connections.NewXrplClient()
 	connections.NewXrplRPCClient()
+
+	// Initialize SocketIO hub
+	socketio.GetHub()
 
 	go connections.SubscribeStreams()
 	go connections.MonitorXRPLConnection()

@@ -148,3 +148,7 @@ run
 
 background backfill
 nohup ./run.sh > logs/backfill.log 2>&1 &
+
+./bin/platform-orchestrator --workers 2 --from 98900000 --to 99119667 --servers "wss://s1.ripple.com/,wss://s2.ripple.com/" --check-interval 30s --verbose --redistribute-threshold 5000 > logs/orchestrator.log 2>&1 &
+
+Остановить оркестратор touch stop.orchestrator
