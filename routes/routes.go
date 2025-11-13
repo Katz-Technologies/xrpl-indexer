@@ -12,13 +12,12 @@ func Add(e *echo.Echo) {
 	e.GET("/tx/:hash", controllers.GetTransaction)
 	e.GET("/account/:address", controllers.GetAccountInfo)
 
-	// SocketIO endpoint - must be registered before other routes that might match
-	// SocketIO handles its own path routing, so we use Any to catch all methods
-	socketIOServer := socketio.GetHub().GetServer()
-	e.Any("/socket.io/", echo.WrapHandler(socketIOServer))
-	e.Any("/socket.io/*", echo.WrapHandler(socketIOServer))
+	hub := socketio.GetHub()
 
-	// Health check endpoint for SocketIO (before SocketIO routes to avoid conflicts)
+	e.Any("/socket.io/", echo.WrapHandler(http.HandlerFunc(hub.HandleSocketIO)))
+	e.Any("/socket.io/*", echo.WrapHandler(http.HandlerFunc(hub.HandleSocketIO)))
+
+	// Health check
 	e.GET("/socketio/health", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]interface{}{
 			"status":  "ok",
