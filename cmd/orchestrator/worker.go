@@ -237,6 +237,22 @@ func (w *Worker) CheckStatus() error {
 		return nil
 	}
 
+	// First, check if process is a zombie (defunct) - this is the most reliable check
+	// On Linux, we can check /proc/PID/stat to see if process is zombie
+	// Check this BEFORE Signal(0) because Signal(0) may succeed on zombie processes
+	statPath := fmt.Sprintf("/proc/%d/stat", w.PID)
+	if statData, err := os.ReadFile(statPath); err == nil {
+		// Parse stat file - third field is state
+		// 'Z' means zombie
+		fields := strings.Fields(string(statData))
+		if len(fields) > 2 && fields[2] == "Z" {
+			// Process is zombie, it has exited
+			log.Printf("[WORKER-%d] Process is zombie (defunct), waiting for it", w.ID)
+			w.updateStatusFromWait()
+			return nil
+		}
+	}
+
 	// Check if process is still running by trying to send signal 0
 	// This doesn't actually send a signal, but checks if process exists
 	process, err := os.FindProcess(w.PID)
@@ -252,21 +268,6 @@ func (w *Worker) CheckStatus() error {
 		// Process is not running (likely exited) - try to wait for it
 		w.updateStatusFromWait()
 		return nil
-	}
-
-	// Check if process is a zombie (defunct)
-	// On Linux, we can check /proc/PID/stat to see if process is zombie
-	statPath := fmt.Sprintf("/proc/%d/stat", w.PID)
-	if statData, err := os.ReadFile(statPath); err == nil {
-		// Parse stat file - third field is state
-		// 'Z' means zombie
-		fields := strings.Fields(string(statData))
-		if len(fields) > 2 && fields[2] == "Z" {
-			// Process is zombie, it has exited
-			log.Printf("[WORKER-%d] Process is zombie (defunct), waiting for it", w.ID)
-			w.updateStatusFromWait()
-			return nil
-		}
 	}
 
 	// Process is still running
@@ -289,6 +290,7 @@ func (w *Worker) updateStatusFromWait() {
 
 	// Process has exited but we haven't called Wait yet
 	// Use a channel with timeout to avoid blocking
+	// For zombie processes, Wait() should return immediately, but we add a timeout for safety
 	done := make(chan error, 1)
 	go func() {
 		done <- w.Cmd.Wait()
@@ -304,10 +306,14 @@ func (w *Worker) updateStatusFromWait() {
 		now := time.Now()
 		w.StopTime = &now
 		log.Printf("[WORKER-%d] Process exited with status: %v", w.ID, w.Status)
-	case <-time.After(100 * time.Millisecond):
-		// Wait timed out, process might still be running
-		// This shouldn't happen if Signal(0) failed, but handle it anyway
-		log.Printf("[WORKER-%d] Wait timed out, process state unclear", w.ID)
+	case <-time.After(2 * time.Second):
+		// Wait timed out - this might happen if Wait() is blocked
+		// For zombie processes, we should still be able to determine status
+		// Mark as failed since we can't determine success
+		log.Printf("[WORKER-%d] Wait timed out after 2s, marking as failed", w.ID)
+		w.Status = WorkerStatusFailed
+		now := time.Now()
+		w.StopTime = &now
 	}
 }
 
