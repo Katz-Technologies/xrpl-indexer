@@ -176,8 +176,11 @@ func (w *ClickHouseBatchWriter) WriteMoneyFlow(row MoneyFlowRow) error {
 // Flush flushes the current batch to ClickHouse
 func (w *ClickHouseBatchWriter) Flush() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.flushUnlocked()
+	err := w.flushUnlocked()
+	// flushUnlocked() guarantees the mutex is re-locked before returning
+	// (including in case of panic), so we can safely unlock it here
+	w.mu.Unlock()
+	return err
 }
 
 // flushUnlocked flushes without locking (must be called with lock held)
@@ -191,6 +194,27 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 
 	// Release lock before database operation
 	w.mu.Unlock()
+	lockReleased := true
+
+	// Use defer to ensure mutex is re-locked in all cases (including panics)
+	// This prevents "unlock of unlocked mutex" errors
+	defer func() {
+		if lockReleased {
+			w.mu.Lock()
+		}
+	}()
+
+	// Recover from panics that might occur during batch operations
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Log.Error().
+				Interface("panic", r).
+				Int("batch_size", len(batch)).
+				Msg("Panic occurred during ClickHouse batch flush")
+			// Mutex will be re-locked by the defer above if it was released
+			panic(r) // Re-panic to preserve stack trace
+		}
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -199,7 +223,6 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 	batchInsert, err := w.conn.PrepareBatch(ctx, "INSERT INTO xrpl.money_flow")
 	if err != nil {
 		logger.Log.Error().Err(err).Int("batch_size", len(batch)).Msg("Failed to prepare batch insert")
-		w.mu.Lock()
 		return fmt.Errorf("failed to prepare batch: %w", err)
 	}
 
@@ -246,7 +269,6 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 		)
 		if err != nil {
 			logger.Log.Error().Err(err).Str("tx_hash", row.TxHash).Msg("Failed to append row to batch")
-			w.mu.Lock()
 			return fmt.Errorf("failed to append row: %w", err)
 		}
 	}
@@ -254,7 +276,6 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 	// Execute batch insert
 	if err := batchInsert.Send(); err != nil {
 		logger.Log.Error().Err(err).Int("batch_size", len(batch)).Msg("Failed to send batch insert")
-		w.mu.Lock()
 		return fmt.Errorf("failed to send batch: %w", err)
 	}
 
@@ -307,7 +328,6 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 				Msg("=== End of detailed logging for ledger ===")
 		}
 	}
-	w.mu.Lock()
 	return nil
 }
 
