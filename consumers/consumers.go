@@ -935,8 +935,9 @@ func isWithinRange(val decimal.Decimal) bool {
 }
 
 // ProcessTransaction processes a transaction map and writes money flows directly to ClickHouse
+// Returns the number of money flow rows written and any error
 // This function can be called directly without Kafka
-func ProcessTransaction(tx map[string]interface{}) error {
+func ProcessTransaction(tx map[string]interface{}) (int, error) {
 	var hash string
 	if h, ok := tx["hash"].(string); ok {
 		hash = h
@@ -946,17 +947,17 @@ func ProcessTransaction(tx map[string]interface{}) error {
 	if tt, ok := tx["TransactionType"].(string); ok {
 		if tt != "Payment" {
 			// Only log if detailed logging is enabled (will check ledger_index later)
-			return nil // Skip non-Payment transactions
+			return 0, nil // Skip non-Payment transactions
 		}
 	} else {
 		// Only log if detailed logging is enabled (will check ledger_index later)
-		return nil // Skip transactions without type
+		return 0, nil // Skip transactions without type
 	}
 
 	modified, err := indexer.ModifyTransaction(tx)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("Error fixing transaction object")
-		return err
+		return 0, err
 	}
 
 	var base map[string]interface{} = modified
@@ -979,13 +980,15 @@ func ProcessTransaction(tx map[string]interface{}) error {
 			Str("tx_hash", hash).
 			Interface("ledger_index_type", base["ledger_index"]).
 			Msg("Failed to extract ledger_index from transaction")
-		return fmt.Errorf("failed to extract ledger_index from transaction")
+		return 0, fmt.Errorf("failed to extract ledger_index from transaction")
 	}
 
 	closeTime, _ := base["date"].(float64)
 	inLedgerIndex := float64(0)
 
 	// Check transaction result and get TransactionIndex from meta
+	// Transactions in a ledger should have meta with TransactionResult
+	// If meta is missing or TransactionResult is not tesSUCCESS, skip the transaction
 	hasMeta := false
 	if meta, ok := base["meta"].(map[string]interface{}); ok {
 		hasMeta = true
@@ -999,12 +1002,31 @@ func ProcessTransaction(tx map[string]interface{}) error {
 						Str("transaction_result", r).
 						Msg("Skipping failed transaction")
 				}
-				return nil // Skip failed transactions
+				return 0, nil // Skip failed transactions
 			}
+		} else {
+			// TransactionResult is missing in meta - this is unusual but we'll skip it to be safe
+			if config.ShouldLogDetailed(uint32(ledgerIndex)) {
+				logger.Log.Debug().
+					Str("tx_hash", hash).
+					Uint32("ledger_index", uint32(ledgerIndex)).
+					Msg("Skipping transaction without TransactionResult in meta")
+			}
+			return 0, nil // Skip transactions without TransactionResult
 		}
 		if ti, ok := meta["TransactionIndex"].(float64); ok {
 			inLedgerIndex = ti
 		}
+	} else {
+		// Meta is missing - this is unusual for transactions in a ledger
+		// We'll skip it to be safe, as we can't verify transaction success
+		if config.ShouldLogDetailed(uint32(ledgerIndex)) {
+			logger.Log.Debug().
+				Str("tx_hash", hash).
+				Uint32("ledger_index", uint32(ledgerIndex)).
+				Msg("Skipping transaction without meta")
+		}
+		return 0, nil // Skip transactions without meta
 	}
 
 	// Only log detailed info if enabled for this ledger
@@ -1187,7 +1209,7 @@ func ProcessTransaction(tx map[string]interface{}) error {
 				Uint32("ledger_index", row.LedgerIndex).
 				Str("kind", row.Kind).
 				Msg("Failed to write money flow row to ClickHouse")
-			return err
+			return 0, err
 		}
 		rowsWritten++
 	}
@@ -1209,7 +1231,7 @@ func ProcessTransaction(tx map[string]interface{}) error {
 		}
 	}
 
-	return nil
+	return rowsWritten, nil
 }
 
 func RunConsumers() {

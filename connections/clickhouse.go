@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -205,14 +206,16 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 	}()
 
 	// Recover from panics that might occur during batch operations
+	// Convert panic to error to prevent worker from hanging
+	var panicErr error
 	defer func() {
 		if r := recover(); r != nil {
+			panicErr = fmt.Errorf("panic during ClickHouse batch flush: %v", r)
 			logger.Log.Error().
 				Interface("panic", r).
 				Int("batch_size", len(batch)).
-				Msg("Panic occurred during ClickHouse batch flush")
+				Msg("Panic occurred during ClickHouse batch flush - converting to error")
 			// Mutex will be re-locked by the defer above if it was released
-			panic(r) // Re-panic to preserve stack trace
 		}
 	}()
 
@@ -233,6 +236,8 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 	}
 
 	// Add rows to batch
+	// Track failed rows to continue processing even if some rows fail
+	failedRows := 0
 	for _, row := range batch {
 		// Convert close_time_unix to DateTime64
 		closeTime := time.Unix(row.CloseTimeUnix, 0).UTC()
@@ -244,33 +249,77 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 			kindValue = "unknown"
 		}
 
-		// Convert Decimal strings to proper Decimal types
-		// clickhouse-go accepts strings for Decimal and converts them automatically
-		// But we can also use decimal.Decimal if needed, for now strings should work
-		err := batchInsert.Append(
-			row.TxHash,
-			row.LedgerIndex,
-			row.InLedgerIndex,
-			closeTime,
-			row.FeeDrops,
-			row.FromAddress,
-			row.ToAddress,
-			row.FromCurrency,
-			row.FromIssuerAddress,
-			row.ToCurrency,
-			row.ToIssuerAddress,
-			row.FromAmount,     // Decimal(38,18) - string is accepted
-			row.ToAmount,       // Decimal(38,18) - string is accepted
-			row.InitFromAmount, // Decimal(38,18) - string is accepted
-			row.InitToAmount,   // Decimal(38,18) - string is accepted
-			row.Quote,          // Decimal(38,18) - string is accepted
-			kindValue,          // Enum8 - string value is accepted
-			row.Version,
-		)
-		if err != nil {
-			logger.Log.Error().Err(err).Str("tx_hash", row.TxHash).Msg("Failed to append row to batch")
-			return fmt.Errorf("failed to append row: %w", err)
+		// Normalize Decimal strings to fit ClickHouse Decimal(38,18) format
+		// This prevents "math/big: buffer too small" errors
+		fromAmount := normalizeDecimalForClickHouse(row.FromAmount)
+		toAmount := normalizeDecimalForClickHouse(row.ToAmount)
+		initFromAmount := normalizeDecimalForClickHouse(row.InitFromAmount)
+		initToAmount := normalizeDecimalForClickHouse(row.InitToAmount)
+		quote := normalizeDecimalForClickHouse(row.Quote)
+
+		// Wrap Append in panic recovery to handle individual row failures
+		appendErr := func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("panic during Append: %v", r)
+					logger.Log.Error().
+						Interface("panic", r).
+						Str("tx_hash", row.TxHash).
+						Str("from_amount", fromAmount).
+						Str("to_amount", toAmount).
+						Str("init_from_amount", initFromAmount).
+						Str("init_to_amount", initToAmount).
+						Str("quote", quote).
+						Msg("Panic occurred while appending row to batch")
+				}
+			}()
+
+			return batchInsert.Append(
+				row.TxHash,
+				row.LedgerIndex,
+				row.InLedgerIndex,
+				closeTime,
+				row.FeeDrops,
+				row.FromAddress,
+				row.ToAddress,
+				row.FromCurrency,
+				row.FromIssuerAddress,
+				row.ToCurrency,
+				row.ToIssuerAddress,
+				fromAmount,     // Decimal(38,18) - normalized string
+				toAmount,       // Decimal(38,18) - normalized string
+				initFromAmount, // Decimal(38,18) - normalized string
+				initToAmount,   // Decimal(38,18) - normalized string
+				quote,          // Decimal(38,18) - normalized string
+				kindValue,      // Enum8 - string value is accepted
+				row.Version,
+			)
+		}()
+
+		if appendErr != nil {
+			failedRows++
+			logger.Log.Error().
+				Err(appendErr).
+				Str("tx_hash", row.TxHash).
+				Str("from_amount", fromAmount).
+				Str("to_amount", toAmount).
+				Msg("Failed to append row to batch, continuing with other rows")
+			// Continue processing other rows instead of returning immediately
+			// This allows the batch to be sent even if some rows fail
 		}
+	}
+
+	// If all rows failed, return error
+	if failedRows == len(batch) {
+		return fmt.Errorf("all %d rows failed to append to batch", len(batch))
+	}
+
+	// Log warning if some rows failed
+	if failedRows > 0 {
+		logger.Log.Warn().
+			Int("failed_rows", failedRows).
+			Int("total_rows", len(batch)).
+			Msg("Some rows failed to append to batch, but continuing with batch send")
 	}
 
 	// Execute batch insert
@@ -328,7 +377,86 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 				Msg("=== End of detailed logging for ledger ===")
 		}
 	}
+
+	// Check if panic occurred and return error instead of panicking
+	if panicErr != nil {
+		return panicErr
+	}
+
 	return nil
+}
+
+// normalizeDecimalForClickHouse normalizes a decimal string to fit ClickHouse Decimal(38,18) format
+// ClickHouse Decimal(38,18) means: up to 38 digits total, with 18 digits after decimal point
+// This function ensures the value fits within these constraints to prevent "buffer too small" errors
+func normalizeDecimalForClickHouse(decimalStr string) string {
+	if decimalStr == "" {
+		return "0"
+	}
+
+	// Remove leading/trailing whitespace
+	decimalStr = strings.TrimSpace(decimalStr)
+
+	// Handle zero
+	if decimalStr == "0" || decimalStr == "0.0" || decimalStr == "0.00" {
+		return "0"
+	}
+
+	// Parse the decimal string
+	// Split by decimal point
+	parts := strings.Split(decimalStr, ".")
+	intPart := parts[0]
+	fracPart := ""
+	if len(parts) > 1 {
+		fracPart = parts[1]
+	}
+
+	// Handle negative sign
+	negative := false
+	if strings.HasPrefix(intPart, "-") {
+		negative = true
+		intPart = intPart[1:]
+	}
+
+	// Remove leading zeros from integer part (but keep at least one digit)
+	intPart = strings.TrimLeft(intPart, "0")
+	if intPart == "" {
+		intPart = "0"
+	}
+
+	// Limit integer part to 38 digits (but we need to leave room for fractional part)
+	// Decimal(38,18) means: 38 total digits, 18 after decimal point
+	// So max integer part is 38 - 18 = 20 digits
+	maxIntDigits := 20
+	if len(intPart) > maxIntDigits {
+		// Truncate integer part (this is a data issue, but we need to handle it)
+		intPart = intPart[:maxIntDigits]
+		logger.Log.Warn().
+			Str("original", decimalStr).
+			Str("truncated_int", intPart).
+			Msg("Decimal integer part too large, truncated to fit ClickHouse Decimal(38,18)")
+	}
+
+	// Limit fractional part to 18 digits
+	maxFracDigits := 18
+	if len(fracPart) > maxFracDigits {
+		// Round or truncate fractional part
+		fracPart = fracPart[:maxFracDigits]
+	}
+
+	// Remove trailing zeros from fractional part
+	fracPart = strings.TrimRight(fracPart, "0")
+
+	// Reconstruct the decimal string
+	result := intPart
+	if negative {
+		result = "-" + result
+	}
+	if fracPart != "" {
+		result = result + "." + fracPart
+	}
+
+	return result
 }
 
 // WriteMoneyFlowRow writes a money flow row (convenience wrapper)

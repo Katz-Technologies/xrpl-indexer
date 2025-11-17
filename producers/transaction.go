@@ -86,10 +86,11 @@ func ProcessTransactionsDirectly(message []byte, isRealtime bool) {
 		}
 
 		// Process transaction directly and write to ClickHouse
-		if err := consumers.ProcessTransaction(tx); err != nil {
+		rowsWritten, err := consumers.ProcessTransaction(tx)
+		if err != nil {
 			logger.Log.Error().Err(err).Str("tx_hash", hash).Uint32("ledger_index", ledger.LedgerIndex).Msg("Failed to process transaction")
 			// Continue processing other transactions even if one fails
-		} else if isRealtime {
+		} else if rowsWritten > 0 && isRealtime {
 			// Emit SocketIO event only for real-time transactions (NOT for backfill)
 			txType := ""
 			if tt, ok := tx["TransactionType"].(string); ok {

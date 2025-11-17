@@ -492,7 +492,8 @@ func (cmd *BackfillCommand) backfillTransactions(ledgerJSON []byte) error {
 		}
 
 		// Process transaction directly and write to ClickHouse
-		if err := consumers.ProcessTransaction(tx); err != nil {
+		rowsWritten, err := consumers.ProcessTransaction(tx)
+		if err != nil {
 			errorCount++
 			logger.Log.Error().
 				Err(err).
@@ -500,13 +501,15 @@ func (cmd *BackfillCommand) backfillTransactions(ledgerJSON []byte) error {
 				Uint32("ledger_index", ledger.LedgerIndex).
 				Msg("Failed to process transaction")
 			// Continue processing other transactions even if one fails
-		} else {
+		} else if rowsWritten > 0 {
 			processedCount++
+			// Track total rows written for this ledger
 			// Only log if detailed logging is enabled for this ledger
 			if cmd.fVerbose && config.ShouldLogDetailed(ledger.LedgerIndex) {
 				logger.Log.Debug().
 					Str("tx_hash", hash).
 					Uint32("ledger_index", ledger.LedgerIndex).
+					Int("rows_written", rowsWritten).
 					Msg("Transaction processed successfully")
 			}
 		}
@@ -515,14 +518,17 @@ func (cmd *BackfillCommand) backfillTransactions(ledgerJSON []byte) error {
 	log.Printf("[BACKFILL] Ledger %d processing summary: total=%d, processed=%d, skipped=%d, errors=%d",
 		ledger.LedgerIndex, len(txs), processedCount, skippedCount, errorCount)
 
-	// If no Payment transactions were processed, record this ledger as empty
+	// If no Payment transactions were successfully processed (processedCount > 0 means rows were written),
+	// record this ledger as empty
+	// Note: We don't flush here - batches are flushed automatically when they reach CLICKHOUSE_BATCH_SIZE
+	// or by the periodic flush timer. This avoids slowing down backfill with unnecessary flushes.
 	if processedCount == 0 {
 		if err := connections.RecordEmptyLedger(uint32(ledgerIndex), int64(closeTime), uint32(len(txs))); err != nil {
 			log.Printf("[BACKFILL] Failed to record empty ledger %d: %v", ledgerIndex, err)
 			// Don't fail the whole process if recording empty ledger fails
 		} else {
-			log.Printf("[BACKFILL] Recorded ledger %d as empty (no Payment transactions, total txs: %d)",
-				ledgerIndex, len(txs))
+			log.Printf("[BACKFILL] Recorded ledger %d as empty (no successful Payment transactions with money flows, processed=%d, total txs: %d)",
+				ledgerIndex, processedCount, len(txs))
 		}
 	}
 

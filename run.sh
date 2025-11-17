@@ -2,7 +2,7 @@
 
 # Запуск оркестратора в фоне
 # Оркестратор будет управлять 3 воркерами для бэкфиллинга
-./bin/platform-orchestrator --workers 2 --from 98900000 --to 99119667 --servers "wss://s1.ripple.com/,wss://s2.ripple.com/" --check-interval 30s --verbose --redistribute-threshold 5000 > logs/orchestrator.log 2>&1 &
+./bin/platform-orchestrator --workers 2 --from 98900000 --to 100000000 --servers "wss://s1.ripple.com/,wss://s2.ripple.com/" --check-interval 30s --verbose --redistribute-threshold 5000 > logs/orchestrator.log 2>&1 &
 
 ORCHESTRATOR_PID=$!
 
