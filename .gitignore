@@ -19,6 +19,7 @@
 
 # Binary output directory
 bin/
-
+logs/
 # Log directory contents
 log/*.log
+logs/*.log

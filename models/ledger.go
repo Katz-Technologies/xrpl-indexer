@@ -1,10 +1,14 @@
 package models
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/xrpscan/platform/connections"
+	"github.com/xrpscan/platform/logger"
 	"github.com/xrpscan/xrpl-go"
 	"github.com/xrpscan/xrpl-go/models"
 )
@@ -76,11 +80,108 @@ func (ledger *LedgerStream) FetchTransactions() (xrpl.BaseResponse, error) {
 		"transactions": true,
 		"expand":       true,
 	}
+
+	logger.Log.Debug().
+		Uint32("ledger_index", ledger.LedgerIndex).
+		Str("request_id", requestId).
+		Msg("Sending ledger request to XRPL server")
+
 	// Prefer RPC client to avoid contention with streaming client
 	client := connections.GetXRPLRequestClient()
-	response, err := client.Request(request)
+
+	// Check connection health before making request
+	if err := connections.CheckXRPLRPCConnectionHealth(); err != nil {
+		logger.Log.Warn().
+			Uint32("ledger_index", ledger.LedgerIndex).
+			Str("request_id", requestId).
+			Err(err).
+			Msg("XRPL RPC connection health check failed before request")
+		return nil, fmt.Errorf("connection health check failed: %w", err)
+	}
+
+	// Create context with timeout for the request
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Log request start time
+	startTime := time.Now()
+	logger.Log.Debug().
+		Uint32("ledger_index", ledger.LedgerIndex).
+		Str("request_id", requestId).
+		Msg("Starting XRPL request with 30s timeout")
+
+	// Make the request with timeout using goroutine and channel
+	type result struct {
+		response xrpl.BaseResponse
+		err      error
+	}
+
+	resultChan := make(chan result, 1)
+
+	go func() {
+		response, err := client.Request(request)
+		resultChan <- result{response: response, err: err}
+	}()
+
+	// Wait for result or timeout
+	var response xrpl.BaseResponse
+	var err error
+
+	select {
+	case res := <-resultChan:
+		response, err = res.response, res.err
+	case <-ctx.Done():
+		err = fmt.Errorf("request timed out after 30 seconds: %w", ctx.Err())
+	}
 	if err != nil {
+		requestDuration := time.Since(startTime)
+		logger.Log.Error().
+			Uint32("ledger_index", ledger.LedgerIndex).
+			Str("request_id", requestId).
+			Dur("request_duration", requestDuration).
+			Err(err).
+			Msg("Failed to fetch transactions from XRPL server")
+
+		// Check if it's a timeout error
+		if ctx.Err() == context.DeadlineExceeded {
+			logger.Log.Warn().
+				Uint32("ledger_index", ledger.LedgerIndex).
+				Str("request_id", requestId).
+				Dur("request_duration", requestDuration).
+				Msg("XRPL request timed out after 30 seconds")
+		}
+
+		// Check if it's a WebSocket connection error
+		if isWebSocketError(err) {
+			logger.Log.Warn().
+				Uint32("ledger_index", ledger.LedgerIndex).
+				Str("request_id", requestId).
+				Dur("request_duration", requestDuration).
+				Err(err).
+				Msg("WebSocket connection error detected")
+		}
+
 		return nil, err
 	}
+
+	requestDuration := time.Since(startTime)
+	logger.Log.Debug().
+		Uint32("ledger_index", ledger.LedgerIndex).
+		Str("request_id", requestId).
+		Dur("request_duration", requestDuration).
+		Msg("Successfully received response from XRPL server")
+
 	return response, nil
+}
+
+// isWebSocketError checks if the error is related to WebSocket connection issues
+func isWebSocketError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "websocket") ||
+		strings.Contains(errStr, "close 1006") ||
+		strings.Contains(errStr, "unexpected EOF") ||
+		strings.Contains(errStr, "connection reset")
 }

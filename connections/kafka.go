@@ -1,161 +1,60 @@
 package connections
 
-import (
-	"sync"
-	"time"
+// Kafka functionality has been removed - data is written directly to ClickHouse
+// This file is kept for compatibility but all functions are no-ops
 
-	"github.com/segmentio/kafka-go"
-	"github.com/xrpscan/platform/config"
-)
+var KafkaWriter interface{} = nil
 
-var KafkaWriter *kafka.Writer
-var wOnce sync.Once
-
-// Common Kafka writer for the application. Every message must
-// specify the Topic where it must be written to.
 func NewWriter() {
-	wOnce.Do(func() {
-		// Configure batching and delivery semantics from env
-		batchTimeout := time.Duration(config.EnvKafkaWriterBatchTimeoutMs()) * time.Millisecond
-		requiredAcks := kafka.RequireOne
-		switch config.EnvKafkaWriterRequiredAcks() {
-		case -1:
-			requiredAcks = kafka.RequireAll
-		case 0:
-			requiredAcks = kafka.RequireNone
-		case 1:
-			requiredAcks = kafka.RequireOne
-		}
-
-		KafkaWriter = &kafka.Writer{
-			Addr:                   kafka.TCP(config.EnvKafkaBootstrapServer()),
-			Balancer:               &kafka.LeastBytes{},
-			Async:                  true,
-			BatchSize:              config.EnvKafkaWriterBatchSize(),
-			BatchBytes:             int64(config.EnvKafkaWriterBatchBytes()),
-			BatchTimeout:           batchTimeout,
-			RequiredAcks:           requiredAcks,
-			AllowAutoTopicCreation: true,
-		}
-	})
+	// Kafka writer is no longer used - data is written directly to ClickHouse
 }
 
-// Returns Kafka reader config with default settings applied
-func NewReaderConfig() kafka.ReaderConfig {
-	return kafka.ReaderConfig{
-		Brokers: []string{config.EnvKafkaBootstrapServer()},
-		GroupID: config.EnvKafkaGroupId(),
-	}
-}
+var KafkaReaderLedger interface{} = nil
+var KafkaReaderTransaction interface{} = nil
+var KafkaReaderValidation interface{} = nil
+var KafkaReaderPeerStatus interface{} = nil
+var KafkaReaderConsensus interface{} = nil
+var KafkaReaderPathFind interface{} = nil
+var KafkaReaderManifest interface{} = nil
+var KafkaReaderServer interface{} = nil
+var KafkaReaderDefault interface{} = nil
 
-var KafkaReaderLedger *kafka.Reader
-var ledgerOnce sync.Once
-
-// Create a new Kafka Reader connection to $namespace-platform-ledger topic
 func NewLedgerReader() {
-	ledgerOnce.Do(func() {
-		cfg := NewReaderConfig()
-		cfg.Topic = config.TopicLedgers()
-		KafkaReaderLedger = kafka.NewReader(cfg)
-	})
+	// Kafka readers are no longer used
 }
 
-var KafkaReaderTransaction *kafka.Reader
-var txOnce sync.Once
-
-// Create a new Kafka Reader connection to $namespace-platform-transaction topic
 func NewTransactionReader() {
-	txOnce.Do(func() {
-		cfg := NewReaderConfig()
-		cfg.Topic = config.TopicTransactions()
-		KafkaReaderTransaction = kafka.NewReader(cfg)
-	})
+	// Kafka readers are no longer used
 }
 
-var KafkaReaderValidation *kafka.Reader
-var validationOnce sync.Once
-
-// Create a new Kafka Reader connection to $namespace-platform-validation topic
 func NewValidationReader() {
-	validationOnce.Do(func() {
-		cfg := NewReaderConfig()
-		cfg.Topic = config.TopicValidations()
-		KafkaReaderValidation = kafka.NewReader(cfg)
-	})
+	// Kafka readers are no longer used
 }
 
-var KafkaReaderPeerStatus *kafka.Reader
-var peerstatusOnce sync.Once
-
-// Create a new Kafka Reader connection to $namespace-platform-peerstatus topic
 func NewPeerStatusReader() {
-	peerstatusOnce.Do(func() {
-		cfg := NewReaderConfig()
-		cfg.Topic = config.TopicPeerStatus()
-		KafkaReaderPeerStatus = kafka.NewReader(cfg)
-	})
+	// Kafka readers are no longer used
 }
 
-var KafkaReaderConsensus *kafka.Reader
-var consensusOnce sync.Once
-
-// Create a new Kafka Reader connection to $namespace-platform-consensus topic
 func NewConsensusReader() {
-	consensusOnce.Do(func() {
-		cfg := NewReaderConfig()
-		cfg.Topic = config.TopicConsensus()
-		KafkaReaderConsensus = kafka.NewReader(cfg)
-	})
+	// Kafka readers are no longer used
 }
 
-var KafkaReaderPathFind *kafka.Reader
-var pathfindOnce sync.Once
-
-// Create a new Kafka Reader connection to $namespace-platform-pathfind topic
 func NewPathFindReader() {
-	pathfindOnce.Do(func() {
-		cfg := NewReaderConfig()
-		cfg.Topic = config.TopicPathFind()
-		KafkaReaderPathFind = kafka.NewReader(cfg)
-	})
+	// Kafka readers are no longer used
 }
 
-var KafkaReaderManifest *kafka.Reader
-var manifestOnce sync.Once
-
-// Create a new Kafka Reader connection to $namespace-platform-manifest topic
 func NewManifestReader() {
-	manifestOnce.Do(func() {
-		cfg := NewReaderConfig()
-		cfg.Topic = config.TopicManifests()
-		KafkaReaderManifest = kafka.NewReader(cfg)
-	})
+	// Kafka readers are no longer used
 }
 
-var KafkaReaderServer *kafka.Reader
-var serverOnce sync.Once
-
-// Create a new Kafka Reader connection to $namespace-platform-server topic
 func NewServerReader() {
-	serverOnce.Do(func() {
-		cfg := NewReaderConfig()
-		cfg.Topic = config.TopicServer()
-		KafkaReaderServer = kafka.NewReader(cfg)
-	})
+	// Kafka readers are no longer used
 }
 
-var KafkaReaderDefault *kafka.Reader
-var defaultOnce sync.Once
-
-// Create a new Kafka Reader connection to $namespace-platform-default topic
 func NewDefaultReader() {
-	defaultOnce.Do(func() {
-		cfg := NewReaderConfig()
-		cfg.Topic = config.TopicDefault()
-		KafkaReaderDefault = kafka.NewReader(cfg)
-	})
+	// Kafka readers are no longer used
 }
 
 func NewReaders() {
-	NewTransactionReader()
+	// Kafka readers are no longer used
 }

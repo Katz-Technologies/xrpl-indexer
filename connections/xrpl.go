@@ -15,19 +15,23 @@ func NewXrplClient() {
 }
 
 func NewXrplClientWithURL(URL string) {
-	// Retry loop with exponential backoff until a successful ping
+	// Infinite retry loop with exponential backoff until a successful ping
 	backoff := time.Second
 	maxBackoff := 30 * time.Second
+	attempt := 0
 
 	for {
+		attempt++
+		logger.Log.Info().Str("url", URL).Int("attempt", attempt).Msg("Attempting to connect XRPL client")
+
 		XrplClient = xrpl.NewClient(xrpl.ClientConfig{URL: URL})
 		err := XrplClient.Ping([]byte(URL))
 		if err == nil {
-			logger.Log.Info().Str("url", URL).Msg("Connected to XRPL server")
+			logger.Log.Info().Str("url", URL).Int("attempt", attempt).Msg("Successfully connected XRPL client")
 			return
 		}
 
-		logger.Log.Warn().Str("url", URL).Dur("retry_in", backoff).Err(err).Msg("XRPL connect failed; retrying")
+		logger.Log.Warn().Str("url", URL).Int("attempt", attempt).Dur("retry_in", backoff).Err(err).Msg("XRPL connect failed; retrying infinitely")
 		time.Sleep(backoff)
 		if backoff < maxBackoff {
 			backoff *= 2

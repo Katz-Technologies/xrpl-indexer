@@ -318,43 +318,33 @@ type Transaction struct {
 }
 
 // Row payloads for ClickHouse ingestion
-type CHTransactionRow struct {
-	TxID          string `json:"tx_id"`
-	Hash          string `json:"hash"`
-	LedgerIndex   uint32 `json:"ledger_index"`
-	CloseTimeUnix int64  `json:"close_time_unix"`
-	TxType        string `json:"tx_type"`
-	AccountID     string `json:"account_id"`
-	DestinationID string `json:"destination_id"`
-	Result        string `json:"result"`
-	FeeDrops      uint64 `json:"fee_drops"`
-	RawJSON       string `json:"raw_json"`
-}
+// Убрано CHTransactionRow - таблицы transactions больше нет
 
 type CHAccountRow struct {
 	AccountID string `json:"account_id"`
 	Address   string `json:"address"`
+	Version   uint64 `json:"version"`
 }
 
-type CHAssetRow struct {
-	AssetID   string `json:"asset_id"`
-	AssetType string `json:"asset_type"`
-	Currency  string `json:"currency"`
-	IssuerID  string `json:"issuer_id"`
-	Symbol    string `json:"symbol"`
-}
+// Убрано CHAssetRow - таблицы assets больше нет
 
 type CHMoneyFlowRow struct {
-	TxID    string `json:"tx_id"`
-	FromID  string `json:"from_id"`
-	ToID    string `json:"to_id"`
-	AssetID string `json:"asset_id"`
-	Amount  string `json:"amount"`
-	// New enriched fields for cross-asset accounting
-	FromAssetID string `json:"from_asset_id"`
-	ToAssetID   string `json:"to_asset_id"`
-	FromAmount  string `json:"from_amount"`
-	ToAmount    string `json:"to_amount"`
-	Quote       string `json:"quote"`
-	Kind        string `json:"kind"`
+	TxHash            string `json:"tx_hash"`             // PRIMARY KEY вместо tx_id UUID
+	LedgerIndex       uint32 `json:"ledger_index"`        // из transactions
+	InLedgerIndex     uint32 `json:"in_ledger_index"`     // из transactions
+	CloseTimeUnix     int64  `json:"close_time_unix"`     // из transactions
+	FeeDrops          uint64 `json:"fee_drops"`           // из transactions
+	FromAddress       string `json:"from_address"`        // адрес отправителя
+	ToAddress         string `json:"to_address"`          // адрес получателя
+	FromCurrency      string `json:"from_currency"`       // валюта отправителя
+	FromIssuerAddress string `json:"from_issuer_address"` // эмитент валюты отправителя
+	ToCurrency        string `json:"to_currency"`         // валюта получателя
+	ToIssuerAddress   string `json:"to_issuer_address"`   // эмитент валюты получателя
+	FromAmount        string `json:"from_amount"`
+	ToAmount          string `json:"to_amount"`
+	InitFromAmount    string `json:"init_from_amount"`
+	InitToAmount      string `json:"init_to_amount"`
+	Quote             string `json:"quote"`
+	Kind              string `json:"kind"`
+	Version           uint64 `json:"version"`
 }

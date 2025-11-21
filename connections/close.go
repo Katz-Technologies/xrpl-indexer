@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/segmentio/kafka-go"
 	"github.com/xrpscan/platform/shutdown"
 )
 
@@ -63,65 +62,22 @@ func closeWithTimeout(name string, closeFn func() error) {
 }
 
 func CloseWriter() {
-	closeWithTimeout("Kafka writer", func() error {
-		if KafkaWriter != nil {
-			return KafkaWriter.Close()
-		}
-		return nil
-	})
+	// Kafka writer is no longer used - no-op
 }
 
 func CloseReaders() {
-	// Define all readers explicitly as pointers to detect typed-nil correctly
-	readers := []struct {
-		name   string
-		reader *kafka.Reader
-	}{
-		{"Kafka Ledger reader", KafkaReaderLedger},
-		{"Kafka Transaction reader", KafkaReaderTransaction},
-		{"Kafka Validation reader", KafkaReaderValidation},
-		{"Kafka PeerStatus reader", KafkaReaderPeerStatus},
-		{"Kafka Consensus reader", KafkaReaderConsensus},
-		{"Kafka PathFind reader", KafkaReaderPathFind},
-		{"Kafka Manifest reader", KafkaReaderManifest},
-		{"Kafka Server reader", KafkaReaderServer},
-		{"Kafka Default reader", KafkaReaderDefault},
-	}
-
-	// Close all readers in parallel with timeout
-	var wg sync.WaitGroup
-	for _, r := range readers {
-		if r.reader != nil {
-			wg.Add(1)
-			go func(name string, reader *kafka.Reader) {
-				defer wg.Done()
-				closeWithTimeout(name, func() error {
-					return reader.Close()
-				})
-			}(r.name, r.reader)
-		}
-	}
-
-	// Wait for all readers to close or timeout
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	// Overall timeout for all readers
-	select {
-	case <-done:
-		log.Println("All Kafka readers closed")
-	case <-time.After(10 * time.Second):
-		log.Println("Timeout waiting for Kafka readers to close")
-	}
+	// Kafka readers are no longer used - no-op
 }
 
 func CloseEsClient() {
 }
 
 func CloseXrplClient() {
+	// Flush all pending ClickHouse batches before closing XRPL connection
+	if err := FlushClickHouse(); err != nil {
+		log.Printf("Error flushing ClickHouse before closing XRPL client: %v", err)
+	}
+
 	closeWithTimeout("XRPL client", func() error {
 		if XrplClient != nil {
 			return XrplClient.Close()
@@ -148,19 +104,7 @@ func CloseAll() {
 	// Close other connections in parallel
 	var wg sync.WaitGroup
 
-	// Close writer
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		CloseWriter()
-	}()
-
-	// Close readers (already parallel internally)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		CloseReaders()
-	}()
+	// Kafka writer and readers are no longer used - skip closing them
 
 	// Close XRPL client
 	wg.Add(1)
@@ -173,6 +117,13 @@ func CloseAll() {
 	go func() {
 		defer wg.Done()
 		CloseXrplRPCClient()
+	}()
+
+	// Close ClickHouse connection
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		CloseClickHouse()
 	}()
 
 	// Close ES client (currently no-op)
