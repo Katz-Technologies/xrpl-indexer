@@ -3,11 +3,11 @@ package socketio
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
-	"math/rand"
 
 	"github.com/gorilla/websocket"
 	"github.com/xrpscan/platform/logger"
@@ -194,12 +194,12 @@ func (h *Hub) EmitLedgerClosed(event LedgerClosedEvent) {
 	h.mu.RLock()
 	clients := make([]*ClientConnection, 0, len(h.clients))
 	for _, c := range h.clients {
-			clients = append(clients, c)
+		clients = append(clients, c)
 	}
 	h.mu.RUnlock()
 
 	if len(clients) == 0 {
-			return
+		return
 	}
 
 	jsonEvent, _ := json.Marshal(event)
@@ -207,13 +207,13 @@ func (h *Hub) EmitLedgerClosed(event LedgerClosedEvent) {
 	frame := fmt.Sprintf(`42["ledger_closed",%s]`, string(jsonEvent))
 
 	for _, cli := range clients {
-			cli.mu.Lock()
-			err := cli.conn.WriteMessage(websocket.TextMessage, []byte(frame))
-			cli.mu.Unlock()
+		cli.mu.Lock()
+		err := cli.conn.WriteMessage(websocket.TextMessage, []byte(frame))
+		cli.mu.Unlock()
 
-			if err != nil {
-					logger.Log.Error().Err(err).Str("sid", cli.sid).Msg("EmitLedgerClosed failed")
-			}
+		if err != nil {
+			logger.Log.Error().Err(err).Str("sid", cli.sid).Msg("EmitLedgerClosed failed")
+		}
 	}
 }
 
@@ -221,12 +221,12 @@ func (h *Hub) EmitTransactionProcessed(event TransactionProcessedEvent) {
 	h.mu.RLock()
 	clients := make([]*ClientConnection, 0, len(h.clients))
 	for _, c := range h.clients {
-			clients = append(clients, c)
+		clients = append(clients, c)
 	}
 	h.mu.RUnlock()
 
 	if len(clients) == 0 {
-			return
+		return
 	}
 
 	jsonEvent, _ := json.Marshal(event)
@@ -234,12 +234,45 @@ func (h *Hub) EmitTransactionProcessed(event TransactionProcessedEvent) {
 	frame := fmt.Sprintf(`42["transaction_processed",%s]`, string(jsonEvent))
 
 	for _, cli := range clients {
-			cli.mu.Lock()
-			err := cli.conn.WriteMessage(websocket.TextMessage, []byte(frame))
-			cli.mu.Unlock()
+		cli.mu.Lock()
+		err := cli.conn.WriteMessage(websocket.TextMessage, []byte(frame))
+		cli.mu.Unlock()
 
-			if err != nil {
-					logger.Log.Error().Err(err).Str("sid", cli.sid).Msg("EmitTransactionProcessed failed")
-			}
+		if err != nil {
+			logger.Log.Error().Err(err).Str("sid", cli.sid).Msg("EmitTransactionProcessed failed")
+		}
 	}
+}
+
+func (h *Hub) EmitNewTokenDetected(event NewTokenDetectedEvent) {
+	h.mu.RLock()
+	clients := make([]*ClientConnection, 0, len(h.clients))
+	for _, c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return
+	}
+
+	jsonEvent, _ := json.Marshal(event)
+
+	frame := fmt.Sprintf(`42["new_token_detected",%s]`, string(jsonEvent))
+
+	for _, cli := range clients {
+		cli.mu.Lock()
+		err := cli.conn.WriteMessage(websocket.TextMessage, []byte(frame))
+		cli.mu.Unlock()
+
+		if err != nil {
+			logger.Log.Error().Err(err).Str("sid", cli.sid).Msg("EmitNewTokenDetected failed")
+		}
+	}
+
+	logger.Log.Info().
+		Str("currency", event.Currency).
+		Str("issuer", event.Issuer).
+		Uint32("ledger_index", event.LedgerIndex).
+		Msg("Emitted new_token_detected event via SocketIO")
 }

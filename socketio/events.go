@@ -15,3 +15,11 @@ type TransactionProcessedEvent struct {
 	Type        string `json:"type"`
 	Timestamp   int64  `json:"timestamp"`
 }
+
+// NewTokenDetectedEvent represents a new token detected event
+type NewTokenDetectedEvent struct {
+	Currency    string `json:"currency"`
+	Issuer      string `json:"issuer"`
+	LedgerIndex uint32 `json:"ledger_index"`
+	Timestamp   int64  `json:"timestamp"`
+}
