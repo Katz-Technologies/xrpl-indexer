@@ -30,18 +30,12 @@ services:
     mem_limit: "6.5g"
     mem_reservation: "6g"
 
-    links:
-      - kafka-broker1:broker
-
-
   clickhouse-init:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse-init
     depends_on:
       clickhouse:
         condition: service_healthy
-      kafka-broker1:
-        condition: service_started
     volumes:
       - ./clickhouse/ddl:/ddl:ro
     entrypoint: /bin/sh
