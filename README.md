@@ -1,155 +1,495 @@
-# Platform
-XRPL Deep search platform is a data processing pipeline to store XRPL transactions in a distributed search and analytics platform. The platform enables simple data retrieval, aggregate information and discovering trends and patterns in XRPL. 
+# XRPL Indexer Platform
 
-### What is Deep search?
-XRP Ledger exploration tools and APIs available today, such as rippled, clio and various explorer APIs provide access to ledger data based on object's primary key such as ledger index, transaction hash, account address, NFT id, object ids etc. This project aims to provide deeper search capability such as filtering transactions by source/destination tags, range query over payment amounts, aggregate volumes and much more. This is enabled by indexing all properties of the transactions in an analytics engine.
+Платформа для индексации и анализа транзакций XRP Ledger (XRPL) с использованием ClickHouse в качестве хранилища данных и Kafka для обработки сообщений.
 
-### Requirements
+## 📋 Содержание
 
-1. [Apache Kafka](https://kafka.apache.org)
-2. [rippled](https://xrpl.org/install-rippled.html)
-3. Access to full history rippled (if backfilling older ledgers)
-4. ClickHouse (see docker-compose)
+- [Описание](#описание)
+- [Возможности](#возможности)
+- [Архитектура](#архитектура)
+- [Требования](#требования)
+- [Установка](#установка)
+- [Конфигурация](#конфигурация)
+- [Использование](#использование)
+- [API](#api)
+- [Структура проекта](#структура-проекта)
+- [База данных](#база-данных)
+- [Разработка](#разработка)
+- [Лицензия](#лицензия)
 
-### Architecture
+## 🎯 Описание
 
-![Search platform architecture](https://github.com/xrpscan/platform/blob/main/assets/xrpscan-platform.png?raw=true)
+XRPL Indexer Platform — это высокопроизводительная система для индексации, хранения и анализа транзакций XRP Ledger. Платформа обеспечивает:
 
-### Installation
+- Реальное время индексацию транзакций через WebSocket подключение к XRPL
+- Хранение данных в ClickHouse для быстрых аналитических запросов
+- Обработку денежных потоков (money flows) из транзакций
+- REST API для доступа к данным
+- WebSocket API (Socket.IO) для получения обновлений в реальном времени
+- Инструменты для бэкфиллинга исторических данных
 
-1. This project is known to run on Linux and macOS. This README lists out steps to
-run the service on CentOS.
+## ✨ Возможности
 
-2. Install Docker via this guide: https://docs.docker.com/engine/install/centos/
+### Основные функции
 
-3. Configure Docker to run as non-root
+- **Индексация в реальном времени**: Автоматическая обработка новых леджеров и транзакций через WebSocket
+- **Анализ денежных потоков**: Извлечение и нормализация денежных потоков из транзакций Payment, DEX, Swap и других
+- **Хранение в ClickHouse**: Оптимизированная схема данных с партиционированием и индексами
+- **REST API**: HTTP endpoints для получения информации о транзакциях и аккаунтах
+- **Socket.IO**: WebSocket API для подписки на события в реальном времени
+- **Бэкфиллинг**: Инструменты для заполнения исторических данных
+- **Оркестратор**: Параллельная обработка больших диапазонов леджеров
+
+### Обрабатываемые типы транзакций
+
+- **Payment**: Переводы XRP и токенов
+- **OfferCreate/OfferCancel**: DEX офферы
+- **Payment + DEX**: Свопы через DEX
+- **AccountSet**: Изменения настроек аккаунта
+- И другие типы транзакций XRPL
+
+## 🏗️ Архитектура
 
 ```
-usermod -aG docker non-root-user
-systemctl restart docker
+┌─────────────┐
+│  XRPL Node  │
+│  (WebSocket)│
+└──────┬──────┘
+       │
+       ▼
+┌─────────────────┐
+│  Main Service   │
+│  (Go Service)   │
+└──────┬──────────┘
+       │
+       ├──► Producers ──► Kafka ──► ClickHouse
+       │
+       ├──► Socket.IO ──► WebSocket Clients
+       │
+       └──► REST API ──► HTTP Clients
 ```
 
-4. Install Zookeeper and Kafka
+### Компоненты
 
+1. **Main Service** (`main.go`): Основной сервис, управляющий подключениями и обработкой
+2. **Producers**: Обработка леджеров и транзакций, запись в Kafka и ClickHouse
+3. **ClickHouse**: Хранилище данных с материализованными представлениями
+4. **Kafka**: Очередь сообщений для асинхронной обработки
+5. **Socket.IO Hub**: Управление WebSocket соединениями
+6. **REST Controllers**: HTTP endpoints для API
+7. **Orchestrator**: Инструмент для параллельного бэкфиллинга
+
+## 📦 Требования
+
+### Системные требования
+
+- **Go**: версия 1.24.0 или выше
+- **Docker**: для запуска ClickHouse и Kafka
+- **Docker Compose**: для оркестрации контейнеров
+- **Linux/Unix**: рекомендуется Linux для продакшена
+
+### Внешние зависимости
+
+- **ClickHouse**: версия 24.8 или выше
+- **Kafka**: для обработки сообщений (опционально)
+- **XRPL Node**: WebSocket подключение к ноде XRPL
+
+## 🚀 Установка
+
+### 1. Клонирование репозитория
+
+```bash
+git clone <repository-url>
+cd xrpl-indexer
 ```
-docker compose up -d
+
+### 2. Установка зависимостей Go
+
+```bash
+go mod download
 ```
 
-5. Install Go via this guide: https://go.dev/doc/install
+### 3. Настройка окружения
 
-6. Build deep search platform
+Создайте файл `.env` на основе примера:
 
-```
-dnf install make
-git clone git@github.com:xrpscan/platform.git
-cd platform
-make
-```
-
-7. Create environment file and update settings within
-
-```
+```bash
 cp .env.example .env
 ```
 
-8. Start ClickHouse and dependencies via docker-compose
+Отредактируйте `.env` файл (см. раздел [Конфигурация](#конфигурация)).
 
-9. Create Kafka topics
+### 4. Запуск ClickHouse через Docker Compose
 
-```
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-ledgers
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-transactions
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-transactions-processed
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-validations
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-manifests
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-peerstatus
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-consensus
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-server
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-default
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-tx
+```bash
+docker-compose up -d clickhouse
 ```
 
-10. ClickHouse DDL is auto-applied by docker-compose `clickhouse-init` service
+Это запустит:
+- ClickHouse сервер на портах 9000 (native) и 8123 (HTTP)
+- Автоматическую инициализацию схемы БД
 
-### Running the service
+### 5. Сборка проекта
 
-1. Index new ledgers
-
+```bash
+make build
 ```
+
+Это создаст исполняемые файлы в директории `bin/`:
+- `bin/platform-server` - основной сервис
+- `bin/platform-cli` - CLI инструмент
+- `bin/platform-orchestrator` - оркестратор для бэкфиллинга
+
+### 6. Запуск сервиса
+
+```bash
 ./bin/platform-server
 ```
 
-2. Backfill old ledgers
+Или используйте скрипт:
 
-```
-./bin/platform-cli backfill -verbose -from 82000000 -to 82999999
-```
-
-### Monitoring the service
-Use `kafka-ui` (included in docker-compose) to inspect topics and messages.
-
-### Querying data
-Data is written only to ClickHouse tables. Query via HTTP:
-
-```
-curl 'http://localhost:8123/?query=SELECT%20count()%20FROM%20xrpl.tx'
+```bash
+./run.sh
 ```
 
-### Maintenance
-Over time, XRPL protocol may receive updates via the [amendment](https://xrpscan.com/amendments) process. Transformer logic in `indexer/modifier.go` normalizes key fields.
+## ⚙️ Конфигурация
 
-### References
-[Ledger Stream - xrpl.org](https://xrpl.org/subscribe.html#ledger-stream)
+Все настройки конфигурируются через переменные окружения в файле `.env`.
 
-### Developer notes
-#### Updating Models
-When a new amendment adds or removes fields from transaction object, review the following files and update as necessary:
+### Основные настройки
 
-* `models/transaction.go`
-* `config/mapping/transaction.go`
-* `models/currency.go` (for Currency fields)
+```env
+# Сервер
+SERVER_HOST=0.0.0.0
+SERVER_PORT=8080
 
-### Known issues
+# Логирование
+LOG_LEVEL=info
+LOG_TYPE=console
+LOG_FILE_ENABLED=true
+LOG_FILE_PATH=logs/platform.log
+LOG_FILE_MAX_SIZE_MB=100
+LOG_FILE_MAX_BACKUPS=3
+LOG_FILE_MAX_AGE_DAYS=7
 
-- [xrpl-go tries to read from websocket even after its connection is closed](https://github.com/xrpscan/platform/issues/36)
+# XRPL
+XRPL_WEBSOCKET_URL=wss://s1.ripple.com/
+XRPL_WEBSOCKET_FULLHISTORY_URL=wss://xrplcluster.com/
 
-### Reporting bugs
-Please create a new issue in [Platform issue tracker](https://github.com/xrpscan/platform/issues)
+# Kafka
+KAFKA_BOOTSTRAP_SERVER=localhost:9092
+KAFKA_GROUP_ID=platform-group
+KAFKA_TOPIC_NAMESPACE=xrpl-platform
+KAFKA_WRITER_BATCH_SIZE=100
+KAFKA_WRITER_BATCH_BYTES=1048576
+KAFKA_WRITER_BATCH_TIMEOUT_MS=50
+KAFKA_WRITER_COMPRESSION=snappy
+KAFKA_WRITER_REQUIRED_ACKS=1
 
-### EOF
+# ClickHouse
+CLICKHOUSE_HOST=localhost
+CLICKHOUSE_PORT=9000
+CLICKHOUSE_DATABASE=xrpl
+CLICKHOUSE_USER=katz
+CLICKHOUSE_PASSWORD=katz-password
+CLICKHOUSE_BATCH_SIZE=5000
+CLICKHOUSE_BATCH_TIMEOUT_MS=5000
 
-docker-compose down -v 
-docker-compose up -d
+# Детальное логирование (опционально)
+DETAILED_LOGGING_LEDGERS=98900000,98900001,98900002
+```
 
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-transactions
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-ch-transactions
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-ch-accounts
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-ch-assets
-docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --create --if-not-exists --topic xrpl-platform-ch-moneyflows
+### Настройки Docker Compose
 
+В `docker-compose.yml` настраиваются параметры ClickHouse:
 
-Windows
-go build -o .\bin\platform-server.exe . 
-go build -o .\bin\platform-cli.exe .\cmd\cli
-go build -o .\bin\platform-orchestrator.exe .\cmd\orchestrator
+- **CPU**: 3.6 ядра
+- **Memory**: 6.5GB лимит, 6GB резерв
+- **Ports**: 9000 (native), 8123 (HTTP)
+- **Volumes**: Данные хранятся в Docker volume `clickhouse-data`
 
-run
-.\bin\platform-server.exe
-.\bin\platform-cli.exe
+## 📖 Использование
 
+### Запуск основного сервиса
 
-Linux
-go build -o ./bin/platform-server ./
-go build -o ./bin/platform-cli ./cmd/cli
-go build -o ./bin/platform-orchestrator ./cmd/orchestrator
+```bash
+# Сборка
+make build
 
-run
+# Запуск
 ./bin/platform-server
-./bin/platform-cli
+```
 
-background backfill
-nohup ./run.sh > logs/backfill.log 2>&1 &
+Сервис начнет:
+1. Подключаться к XRPL ноде через WebSocket
+2. Подписываться на поток леджеров
+3. Обрабатывать транзакции в реальном времени
+4. Записывать данные в ClickHouse
+5. Отправлять события через Socket.IO
 
-./bin/platform-orchestrator --workers 2 --from 98900000 --to 99119667 --servers "wss://s1.ripple.com/,wss://s2.ripple.com/" --check-interval 30s --verbose --redistribute-threshold 5000 > logs/orchestrator.log 2>&1 &
+### Использование оркестратора для бэкфиллинга
 
-Остановить оркестратор touch stop.orchestrator
+Оркестратор позволяет параллельно обрабатывать большие диапазоны леджеров:
+
+```bash
+./bin/platform-orchestrator \
+  --workers 4 \
+  --from 82000000 \
+  --to 85000000 \
+  --servers "wss://s1.ripple.com/,wss://s2.ripple.com/,wss://xrplcluster.com/" \
+  --check-interval 30s \
+  --verbose
+```
+
+Параметры:
+- `--workers`: Количество параллельных процессов (по умолчанию: 2)
+- `--from`: Начальный индекс леджера
+- `--to`: Конечный индекс леджера
+- `--servers`: Список XRPL серверов через запятую
+- `--check-interval`: Интервал проверки статуса (по умолчанию: 30s)
+- `--verbose`: Подробное логирование
+
+### Запуск в фоне
+
+Используйте скрипт `run.sh` для запуска оркестратора в фоне:
+
+```bash
+./run.sh
+```
+
+Логи будут записываться в:
+- `logs/orchestrator.log` - логи оркестратора
+- `logs/orchestrator-worker-*.log` - логи воркеров
+
+## 🔌 API
+
+### REST API
+
+#### Получить информацию о транзакции
+
+```http
+GET /tx/:hash
+```
+
+**Пример:**
+```bash
+curl http://localhost:8080/tx/ABC123...
+```
+
+#### Получить информацию об аккаунте
+
+```http
+GET /account/:address
+```
+
+**Пример:**
+```bash
+curl http://localhost:8080/account/rw2ciyaNshpHe7bCHo4bRWq6pqqynnWKQg
+```
+
+#### Health Check
+
+```http
+GET /socketio/health
+```
+
+### Socket.IO API
+
+Подключение к WebSocket серверу:
+
+```javascript
+const socket = io('http://localhost:8080/socket.io/');
+
+// Подписка на закрытие леджеров
+socket.on('ledger_closed', (data) => {
+  console.log('New ledger:', data);
+  // {
+  //   ledger_index: 12345678,
+  //   ledger_hash: "...",
+  //   txn_count: 42,
+  //   timestamp: 1234567890
+  // }
+});
+
+// Подписка на транзакции
+socket.on('transaction', (data) => {
+  console.log('New transaction:', data);
+});
+```
+
+## 📁 Структура проекта
+
+```
+xrpl-indexer/
+├── bin/                    # Скомпилированные бинарники
+├── clickhouse/
+│   ├── config/             # Конфигурация ClickHouse
+│   └── ddl/                # SQL схемы
+│       └── 001_init.sql    # Основная схема БД
+├── cmd/
+│   ├── cli/                # CLI инструмент
+│   └── orchestrator/       # Оркестратор бэкфиллинга
+├── config/                 # Конфигурация приложения
+│   ├── env.go              # Переменные окружения
+│   └── topics.go           # Kafka топики
+├── connections/            # Подключения к внешним сервисам
+├── consumers/              # Kafka consumers (устарело)
+├── controllers/            # HTTP контроллеры
+│   ├── AccountController.go
+│   └── TransactionController.go
+├── indexer/                # Логика индексации
+├── logger/                 # Логирование
+├── models/                 # Модели данных
+├── producers/              # Обработка леджеров и транзакций
+│   ├── ledger.go
+│   ├── transaction.go
+│   └── validation.go
+├── responses/              # HTTP ответы
+├── routes/                 # Маршруты API
+│   └── routes.go
+├── signals/                # Обработка сигналов ОС
+├── socketio/               # Socket.IO hub
+├── docker-compose.yml      # Docker Compose конфигурация
+├── go.mod                  # Go зависимости
+├── go.sum                  # Go checksums
+├── main.go                 # Точка входа
+├── Makefile                # Make команды
+└── run.sh                  # Скрипт запуска оркестратора
+```
+
+## 🗄️ База данных
+
+### Схема ClickHouse
+
+Проект использует ClickHouse версии 24.8+ с оптимизированной схемой данных.
+
+#### Основные таблицы
+
+**`xrpl.money_flow`**
+- Хранит денежные потоки из транзакций
+- Партиционирование по месяцам (`toYYYYMM(close_time)`)
+- Индексы по адресам, валютам, типам транзакций
+- Использует `ReplacingMergeTree` для дедупликации
+
+**`xrpl.empty_ledgers`**
+- Хранит информацию о леджерах без Payment транзакций
+- Используется для оптимизации запросов
+
+**`xrpl.xrp_prices`**
+- Хранит историю цен XRP в USD
+- Партиционирование по месяцам
+
+#### Kafka интеграция
+
+- **`xrpl.ch_moneyflows_kafka`**: Kafka таблица для приема сообщений
+- **`xrpl.ch_mv_money_flows`**: Материализованное представление для автоматической обработки
+
+### Запросы к базе данных
+
+Примеры полезных запросов:
+
+```sql
+-- Получить денежные потоки для адреса
+SELECT * FROM xrpl.money_flow
+WHERE from_address = 'r...' OR to_address = 'r...'
+ORDER BY close_time DESC
+LIMIT 100;
+
+-- Статистика по типам транзакций
+SELECT kind, count() as count
+FROM xrpl.money_flow
+WHERE close_time >= now() - INTERVAL 1 DAY
+GROUP BY kind;
+
+-- Топ адресов по объему транзакций
+SELECT 
+  to_address,
+  sum(to_amount) as total_received
+FROM xrpl.money_flow
+WHERE to_currency = 'XRP'
+  AND close_time >= now() - INTERVAL 7 DAY
+GROUP BY to_address
+ORDER BY total_received DESC
+LIMIT 10;
+```
+
+## 🛠️ Разработка
+
+### Сборка проекта
+
+```bash
+# Сборка всех компонентов
+make build
+
+# Очистка
+make clean
+```
+
+### Запуск тестов
+
+```bash
+go test ./...
+```
+
+### Форматирование кода
+
+```bash
+go fmt ./...
+```
+
+### Линтинг
+
+```bash
+golangci-lint run
+```
+
+### Добавление новых типов транзакций
+
+1. Добавьте обработку в `producers/transaction.go`
+2. Обновите модель в `models/`
+3. При необходимости обновите схему БД в `clickhouse/ddl/`
+
+### Логирование
+
+Проект использует `zerolog` для структурированного логирования. Уровни логирования:
+- `debug`: Детальная отладочная информация
+- `info`: Общая информация (по умолчанию)
+- `warn`: Предупреждения
+- `error`: Ошибки
+
+Для детального логирования конкретных леджеров используйте переменную окружения:
+```env
+DETAILED_LOGGING_LEDGERS=98900000,98900001
+```
+
+## 📝 Лицензия
+
+Этот проект распространяется под лицензией GNU General Public License v3.0. См. файл [LICENSE](LICENSE) для подробностей.
+
+## 🤝 Вклад в проект
+
+Приветствуются pull requests и issues. Перед внесением изменений:
+
+1. Создайте issue для обсуждения крупных изменений
+2. Форкните репозиторий
+3. Создайте ветку для вашей функции (`git checkout -b feature/amazing-feature`)
+4. Закоммитьте изменения (`git commit -m 'Add amazing feature'`)
+5. Запушьте в ветку (`git push origin feature/amazing-feature`)
+6. Откройте Pull Request
+
+## 📞 Поддержка
+
+Для вопросов и поддержки создайте issue в репозитории проекта.
+
+## 🔗 Полезные ссылки
+
+- [XRPL Documentation](https://xrpl.org/)
+- [ClickHouse Documentation](https://clickhouse.com/docs)
+- [Go Documentation](https://go.dev/doc/)
+- [Echo Framework](https://echo.labstack.com/)
+- [Socket.IO](https://socket.io/)
+
+---
+
+**Примечание**: Этот проект находится в активной разработке. API и схема базы данных могут изменяться между версиями.
+
