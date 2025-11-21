@@ -11,7 +11,6 @@ import (
 
 func GetAccountInfo(c echo.Context) error {
 	address := c.Param("address")
-	// Kafka producer removed - data is written directly to ClickHouse
 	req := xrpl.BaseRequest{
 		"command": "account_info",
 		"account": "rw2ciyaNshpHe7bCHo4bRWq6pqqynnWKQg",

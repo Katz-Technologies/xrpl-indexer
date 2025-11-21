@@ -61,17 +61,6 @@ func closeWithTimeout(name string, closeFn func() error) {
 	}
 }
 
-func CloseWriter() {
-	// Kafka writer is no longer used - no-op
-}
-
-func CloseReaders() {
-	// Kafka readers are no longer used - no-op
-}
-
-func CloseEsClient() {
-}
-
 func CloseXrplClient() {
 	// Flush all pending ClickHouse batches before closing XRPL connection
 	if err := FlushClickHouse(); err != nil {
@@ -104,8 +93,6 @@ func CloseAll() {
 	// Close other connections in parallel
 	var wg sync.WaitGroup
 
-	// Kafka writer and readers are no longer used - skip closing them
-
 	// Close XRPL client
 	wg.Add(1)
 	go func() {
@@ -125,9 +112,6 @@ func CloseAll() {
 		defer wg.Done()
 		CloseClickHouse()
 	}()
-
-	// Close ES client (currently no-op)
-	CloseEsClient()
 
 	// Wait for all closures with overall timeout
 	done := make(chan struct{})

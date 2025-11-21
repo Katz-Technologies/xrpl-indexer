@@ -567,10 +567,8 @@ func CloseClickHouse() {
 }
 
 // WriteLedgerToClickHouse writes ledger data directly to ClickHouse (if needed in future)
-// Currently ledgers are written to Kafka, but this can be used for direct writes
 func WriteLedgerToClickHouse(ledgerJSON []byte) error {
 	// This is a placeholder for future direct ledger writes
-	// For now, we keep ledger writes to Kafka as they are processed by consumers
 	logger.Log.Debug().Msg("WriteLedgerToClickHouse called (not implemented)")
 	return nil
 }
