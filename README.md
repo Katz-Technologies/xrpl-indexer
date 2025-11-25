@@ -129,7 +129,7 @@ docker exec kafka-broker1 kafka-topics --bootstrap-server kafka-broker1:9092 --c
 
 
 Windows
-go build -o .\bin\platform-server.exe . 
+go build -o .\bin\platform-server.exe .
 go build -o .\bin\platform-cli.exe .\cmd\cli
 go build -o .\bin\platform-orchestrator.exe .\cmd\orchestrator
 

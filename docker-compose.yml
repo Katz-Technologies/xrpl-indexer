@@ -35,7 +35,37 @@ services:
     volumes:
       - ./clickhouse/ddl:/ddl:ro
     entrypoint: /bin/sh
-    command: -c "for f in /ddl/*.sql; do echo Running $$f; clickhouse-client --host 51.250.120.186 --user=katz --password=katz-password --multiquery < $$f; done"
+    command:
+      - -c
+      - |
+        echo 'Waiting for ClickHouse to be ready...'
+        sleep 5
+        for i in 1 2 3 4 5; do
+          if clickhouse-client --host clickhouse --port 9000 --user=katz --password=katz-password --query='SELECT 1' 2>/dev/null; then
+            echo 'ClickHouse is ready!'
+            break
+          else
+            echo "Attempt $$i/5: ClickHouse not ready yet, waiting..."
+            sleep 3
+          fi
+        done
+        echo "Checking for SQL files in /ddl..."
+        ls -la /ddl/ || echo "Directory /ddl not found or empty"
+        if [ ! -d /ddl ]; then
+          echo "ERROR: /ddl directory does not exist"
+          exit 1
+        fi
+        sql_files=$$(ls /ddl/*.sql 2>/dev/null | wc -l)
+        if [ "$$sql_files" -eq 0 ]; then
+          echo "ERROR: No SQL files found in /ddl/"
+          exit 1
+        fi
+        echo "Found $$sql_files SQL file(s)"
+        for f in /ddl/*.sql; do
+          echo "Running $$f"
+          clickhouse-client --host clickhouse --port 9000 --user=katz --password=katz-password --database=xrpl --multiquery < "$$f" || exit 1
+        done
+        echo 'Migrations completed successfully!'
     restart: "no"
 
 volumes:
