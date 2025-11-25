@@ -145,10 +145,14 @@ go build -o ./bin/platform-cli ./cmd/cli
 go build -o ./bin/platform-orchestrator ./cmd/orchestrator
 ```
 
-Или используйте Makefile:
+Или используйте Makefile (Linux) или build.bat (Windows):
 
 ```bash
+# Linux
 make build
+
+# Windows
+build.bat
 ```
 
 Это создаст исполняемые файлы в директории `bin/`:
@@ -247,6 +251,8 @@ make build
 
 Оркестратор позволяет параллельно обрабатывать большие диапазоны леджеров:
 
+#### Linux
+
 ```bash
 ./bin/platform-orchestrator \
   --workers 4 \
@@ -255,6 +261,12 @@ make build
   --servers "wss://s1.ripple.com/,wss://s2.ripple.com/,wss://xrplcluster.com/" \
   --check-interval 30s \
   --verbose
+```
+
+#### Windows
+
+```batch
+.\bin\platform-orchestrator.exe --workers 4 --from 82000000 --to 85000000 --servers "wss://s1.ripple.com/,wss://s2.ripple.com/,wss://xrplcluster.com/" --check-interval 30s --verbose
 ```
 
 Параметры:
@@ -285,6 +297,63 @@ nohup ./run.sh > logs/backfill.log 2>&1 &
 
 ```bash
 touch stop.orchestrator
+```
+
+#### Windows
+
+Для запуска оркестратора в фоне используйте скрипт:
+
+```batch
+run_orchestrator.bat
+```
+
+Или вручную:
+
+```batch
+start /B "" .\bin\platform-orchestrator.exe --workers 2 --from 98900000 --to 99119667 --servers "wss://s1.ripple.com/,wss://s2.ripple.com/" --check-interval 30s --verbose --redistribute-threshold 5000 > logs\orchestrator.log 2>&1
+```
+
+Для остановки оркестратора используйте скрипт:
+
+```batch
+stop_orchestrator.bat
+```
+
+Или создайте файл вручную:
+
+```batch
+echo. > stop.orchestrator
+```
+
+**Примечание**: Оркестратор проверяет файл `stop.orchestrator` каждые 5 секунд. Если оркестратор не останавливается, используйте скрипт `stop_orchestrator.bat`, который принудительно завершит процесс.
+
+### Проверка статуса оркестратора
+
+Для проверки статуса оркестратора и воркеров используйте скрипт:
+
+```batch
+status_orchestrator.bat
+```
+
+Скрипт покажет:
+- Запущенные процессы оркестратора
+- Запущенные процессы воркеров (platform-cli.exe)
+- Информацию из PID файла
+- Наличие файла остановки
+- Последние строки логов
+- Список лог-файлов воркеров
+
+Или используйте команды PowerShell:
+
+```powershell
+# Проверить процессы оркестратора
+Get-Process | Where-Object {$_.ProcessName -like "*platform-orchestrator*"}
+
+# Проверить процессы воркеров
+Get-Process | Where-Object {$_.ProcessName -like "*platform-cli*"}
+
+# Посмотреть последние логи
+Get-Content logs\orchestrator.log -Tail 20
 ```
 
 Логи будут записываться в:

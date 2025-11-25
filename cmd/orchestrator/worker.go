@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -154,10 +155,21 @@ func (w *Worker) Stop(graceful bool) error {
 	}
 
 	if graceful {
-		// Send SIGTERM for graceful shutdown
-		err := w.Cmd.Process.Signal(syscall.SIGTERM)
-		if err != nil {
-			log.Printf("[WORKER-%d] Error sending SIGTERM: %v", w.ID, err)
+		// On Windows, SIGTERM is not supported
+		// For graceful shutdown on Windows, we just wait for the process to finish naturally
+		// On Unix systems, we use SIGTERM for graceful shutdown
+		if runtime.GOOS != "windows" {
+			// On Unix systems, use SIGTERM for graceful shutdown
+			err := w.Cmd.Process.Signal(syscall.SIGTERM)
+			if err != nil {
+				log.Printf("[WORKER-%d] Error sending SIGTERM: %v", w.ID, err)
+			} else {
+				log.Printf("[WORKER-%d] Sent SIGTERM for graceful shutdown", w.ID)
+			}
+		} else {
+			// On Windows, we can't send signals to child processes reliably
+			// Just wait for the process to finish naturally (it should handle shutdown on its own)
+			log.Printf("[WORKER-%d] Waiting for process to finish naturally (Windows graceful shutdown)", w.ID)
 		}
 
 		// Wait for graceful shutdown with timeout
@@ -223,41 +235,116 @@ func (w *Worker) CheckStatus() error {
 		return nil
 	}
 
+	// Don't check status too early after start - give the process time to initialize
+	// This prevents false positives on Windows where Signal(0) might fail for newly started processes
+	if time.Since(w.StartTime) < 3*time.Second {
+		// Process just started, don't check status yet
+		return nil
+	}
+
 	// First, try to get process state if available (process might have exited)
 	if w.Cmd.ProcessState != nil {
 		// Process has exited
-		if w.Cmd.ProcessState.Success() {
-			w.Status = WorkerStatusCompleted
-		} else {
-			w.Status = WorkerStatusFailed
+		// Only update and log if status is changing (not already set)
+		if w.Status == WorkerStatusRunning {
+			if w.Cmd.ProcessState.Success() {
+				w.Status = WorkerStatusCompleted
+			} else {
+				w.Status = WorkerStatusFailed
+			}
+			now := time.Now()
+			w.StopTime = &now
+			log.Printf("[WORKER-%d] Process exited with status: %v", w.ID, w.Status)
 		}
-		now := time.Now()
-		w.StopTime = &now
-		log.Printf("[WORKER-%d] Process exited with status: %v", w.ID, w.Status)
 		return nil
 	}
 
 	// First, check if process is a zombie (defunct) - this is the most reliable check
 	// On Linux, we can check /proc/PID/stat to see if process is zombie
 	// Check this BEFORE Signal(0) because Signal(0) may succeed on zombie processes
-	statPath := fmt.Sprintf("/proc/%d/stat", w.PID)
-	if statData, err := os.ReadFile(statPath); err == nil {
-		// Parse stat file - third field is state
-		// 'Z' means zombie
-		fields := strings.Fields(string(statData))
-		if len(fields) > 2 && fields[2] == "Z" {
-			// Process is zombie, it has exited
-			log.Printf("[WORKER-%d] Process is zombie (defunct), waiting for it", w.ID)
-			w.updateStatusFromWait()
+	// Note: This is Linux-specific, on Windows we skip this check
+	if runtime.GOOS == "linux" {
+		statPath := fmt.Sprintf("/proc/%d/stat", w.PID)
+		if statData, err := os.ReadFile(statPath); err == nil {
+			// Parse stat file - third field is state
+			// 'Z' means zombie
+			fields := strings.Fields(string(statData))
+			if len(fields) > 2 && fields[2] == "Z" {
+				// Process is zombie, it has exited
+				log.Printf("[WORKER-%d] Process is zombie (defunct), waiting for it", w.ID)
+				w.updateStatusFromWait()
+				return nil
+			}
+		}
+	}
+
+	// On Windows, Signal(0) is unreliable, so we use a different approach
+	if runtime.GOOS == "windows" {
+		// On Windows, check if ProcessState is available (set automatically when process exits)
+		// If ProcessState is nil, process is still running
+		if w.Cmd.ProcessState != nil {
+			// Process has exited - ProcessState is set automatically
+			// Only update and log if status is changing (not already set)
+			if w.Status == WorkerStatusRunning {
+				if w.Cmd.ProcessState.Success() {
+					w.Status = WorkerStatusCompleted
+				} else {
+					w.Status = WorkerStatusFailed
+				}
+				now := time.Now()
+				w.StopTime = &now
+				log.Printf("[WORKER-%d] Process exited with status: %v", w.ID, w.Status)
+			}
+			return nil
+		}
+
+		// ProcessState is nil, but process might have exited
+		// On Windows, we need to explicitly call Wait() to get ProcessState
+		// But Wait() blocks if process is still running, so we use a goroutine with timeout
+		done := make(chan struct {
+			err error
+			ok  bool
+		}, 1)
+		go func() {
+			err := w.Cmd.Wait()
+			done <- struct {
+				err error
+				ok  bool
+			}{err: err, ok: true}
+		}()
+
+		select {
+		case result := <-done:
+			// Process has exited (Wait() returned)
+			// Only update and log if status is changing (not already set)
+			if w.Status == WorkerStatusRunning {
+				if result.err == nil {
+					w.Status = WorkerStatusCompleted
+				} else {
+					w.Status = WorkerStatusFailed
+				}
+				now := time.Now()
+				w.StopTime = &now
+				log.Printf("[WORKER-%d] Process exited with status: %v", w.ID, w.Status)
+			}
+			return nil
+		case <-time.After(200 * time.Millisecond):
+			// Wait() is still blocking, process is still running
+			// Note: We can't cancel the Wait() goroutine, but that's okay
+			// It will complete when the process exits and set ProcessState
 			return nil
 		}
 	}
 
-	// Check if process is still running by trying to send signal 0
-	// This doesn't actually send a signal, but checks if process exists
+	// On Unix systems, use Signal(0) which is reliable
 	process, err := os.FindProcess(w.PID)
 	if err != nil {
-		// Process not found, it has exited
+		// Process not found - but wait a bit more if process just started
+		if time.Since(w.StartTime) < 5*time.Second {
+			// Process just started, might not be fully registered yet
+			return nil
+		}
+		// Process not found and enough time has passed, it has exited
 		w.updateStatusFromWait()
 		return nil
 	}
@@ -265,6 +352,11 @@ func (w *Worker) CheckStatus() error {
 	// Try to send signal 0 to check if process exists
 	err = process.Signal(syscall.Signal(0))
 	if err != nil {
+		// Signal failed - but wait a bit more if process just started
+		if time.Since(w.StartTime) < 5*time.Second {
+			// Process just started, might not be ready yet
+			return nil
+		}
 		// Process is not running (likely exited) - try to wait for it
 		w.updateStatusFromWait()
 		return nil
@@ -284,13 +376,16 @@ func (w *Worker) updateStatusFromWait() {
 		}
 		now := time.Now()
 		w.StopTime = &now
-		log.Printf("[WORKER-%d] Process exited with status: %v", w.ID, w.Status)
+		// Only log if status is changing (not already set)
+		if w.Status == WorkerStatusRunning {
+			log.Printf("[WORKER-%d] Process exited with status: %v", w.ID, w.Status)
+		}
 		return
 	}
 
 	// Process has exited but we haven't called Wait yet
 	// Use a channel with timeout to avoid blocking
-	// For zombie processes, Wait() should return immediately, but we add a timeout for safety
+	// For completed processes, Wait() should return immediately
 	done := make(chan error, 1)
 	go func() {
 		done <- w.Cmd.Wait()
@@ -298,22 +393,33 @@ func (w *Worker) updateStatusFromWait() {
 
 	select {
 	case err := <-done:
-		if err == nil {
-			w.Status = WorkerStatusCompleted
+		// Wait() returned - process has exited
+		// ProcessState should now be set
+		if w.Cmd.ProcessState != nil {
+			if w.Cmd.ProcessState.Success() {
+				w.Status = WorkerStatusCompleted
+			} else {
+				w.Status = WorkerStatusFailed
+			}
 		} else {
-			w.Status = WorkerStatusFailed
+			// ProcessState not set yet, use error to determine status
+			if err == nil {
+				w.Status = WorkerStatusCompleted
+			} else {
+				w.Status = WorkerStatusFailed
+			}
 		}
 		now := time.Now()
 		w.StopTime = &now
-		log.Printf("[WORKER-%d] Process exited with status: %v", w.ID, w.Status)
-	case <-time.After(2 * time.Second):
-		// Wait timed out - this might happen if Wait() is blocked
-		// For zombie processes, we should still be able to determine status
-		// Mark as failed since we can't determine success
-		log.Printf("[WORKER-%d] Wait timed out after 2s, marking as failed", w.ID)
-		w.Status = WorkerStatusFailed
-		now := time.Now()
-		w.StopTime = &now
+		// Only log if status is changing (not already set)
+		if w.Status == WorkerStatusRunning {
+			log.Printf("[WORKER-%d] Process exited with status: %v", w.ID, w.Status)
+		}
+	case <-time.After(100 * time.Millisecond):
+		// Wait() didn't return quickly - process is still running
+		// Don't update status, just return
+		// The goroutine will continue waiting and set ProcessState when process exits
+		return
 	}
 }
 

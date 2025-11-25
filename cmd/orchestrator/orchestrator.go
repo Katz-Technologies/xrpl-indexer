@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -89,6 +91,12 @@ func (o *Orchestrator) Run(ctx context.Context, cancel context.CancelFunc) error
 	stopFileCheckTicker := time.NewTicker(5 * time.Second)
 	defer stopFileCheckTicker.Stop()
 
+	// Get absolute path to stop file to handle cases where working directory changes
+	stopFilePath := "stop.orchestrator"
+	if wd, err := os.Getwd(); err == nil {
+		stopFilePath = filepath.Join(wd, "stop.orchestrator")
+	}
+
 	// Main orchestration loop
 	for {
 		select {
@@ -97,12 +105,12 @@ func (o *Orchestrator) Run(ctx context.Context, cancel context.CancelFunc) error
 			o.StopAllWorkers(true)
 			return nil
 		case <-stopFileCheckTicker.C:
-			// Check for stop file
-			if _, err := os.Stat("stop.orchestrator"); err == nil {
-				log.Printf("[ORCHESTRATOR] Stop file detected, shutting down gracefully...")
+			// Check for stop file using absolute path
+			if _, err := os.Stat(stopFilePath); err == nil {
+				log.Printf("[ORCHESTRATOR] Stop file detected at %s, shutting down gracefully...", stopFilePath)
 				o.StopAllWorkers(true)
 				// Remove stop file
-				os.Remove("stop.orchestrator")
+				os.Remove(stopFilePath)
 				return nil
 			}
 		default:
@@ -114,6 +122,31 @@ func (o *Orchestrator) Run(ctx context.Context, cancel context.CancelFunc) error
 
 			// Start workers if not running
 			if len(o.workers) == 0 || !o.hasRunningWorkers() {
+				// First, check if any workers have completed but status wasn't updated
+				// This can happen on Windows where process detection is unreliable
+				workersCompleted := false
+				for _, worker := range o.workers {
+					if worker.PID > 0 {
+						// Force status check for workers that might have completed
+						prevStatus := worker.Status
+						worker.CheckStatus()
+						// If status changed to completed/failed, trigger redistribution
+						if prevStatus == WorkerStatusRunning && (worker.IsCompleted() || worker.IsFailed()) {
+							workersCompleted = true
+							log.Printf("[ORCHESTRATOR] Worker %d completed during status check (was %s, now %s)",
+								worker.ID, prevStatus, worker.Status)
+						}
+					}
+				}
+
+				// If workers completed, trigger redistribution logic
+				if workersCompleted {
+					log.Printf("[ORCHESTRATOR] Workers completed, will redistribute on next iteration")
+					// Clear workers to trigger redistribution
+					o.workers = []*Worker{}
+					continue
+				}
+
 				// Check if we're done before trying to start workers
 				if o.currentFrom > o.currentTo {
 					log.Printf("[ORCHESTRATOR] All ledgers processed, exiting")
@@ -145,6 +178,7 @@ func (o *Orchestrator) Run(ctx context.Context, cancel context.CancelFunc) error
 			// Check if all workers have completed
 			allCompleted := true
 			anyRunning := false
+			workersWithUnknownStatus := 0
 			for _, worker := range o.workers {
 				if worker.IsRunning() {
 					anyRunning = true
@@ -153,6 +187,57 @@ func (o *Orchestrator) Run(ctx context.Context, cancel context.CancelFunc) error
 				}
 				if !worker.IsCompleted() && !worker.IsFailed() {
 					allCompleted = false
+					workersWithUnknownStatus++
+					// If worker has PID but status is unknown, it might have completed
+					// On Windows, process detection can be unreliable, so we need to be more aggressive
+					if worker.PID > 0 && runtime.GOOS == "windows" {
+						// Check ProcessState first (most reliable)
+						if worker.Cmd.ProcessState != nil {
+							// Process has exited
+							if worker.Cmd.ProcessState.Success() {
+								worker.Status = WorkerStatusCompleted
+							} else {
+								worker.Status = WorkerStatusFailed
+							}
+							now := time.Now()
+							worker.StopTime = &now
+							log.Printf("[ORCHESTRATOR] Worker %d (PID %d) process exited, status: %s", worker.ID, worker.PID, worker.Status)
+							allCompleted = false // Will be recalculated
+							continue
+						}
+						// Check if process still exists
+						_, err := os.FindProcess(worker.PID)
+						if err != nil {
+							// Process not found - it has exited
+							log.Printf("[ORCHESTRATOR] Worker %d (PID %d) process not found, marking as completed", worker.ID, worker.PID)
+							worker.Status = WorkerStatusCompleted
+							now := time.Now()
+							worker.StopTime = &now
+							allCompleted = false // Will be recalculated
+							continue
+						}
+						// Process exists but ProcessState is nil - might still be running
+						// But if it's been a while since start, it might have exited
+						if time.Since(worker.StartTime) > 10*time.Second {
+							log.Printf("[ORCHESTRATOR] Worker %d (PID %d) has unknown status after 10s, checking...", worker.ID, worker.PID)
+						}
+					}
+				}
+			}
+
+			// Recalculate allCompleted after potential status updates
+			if workersWithUnknownStatus > 0 {
+				allCompleted = true
+				anyRunning = false
+				for _, worker := range o.workers {
+					if worker.IsRunning() {
+						anyRunning = true
+						allCompleted = false
+						break
+					}
+					if !worker.IsCompleted() && !worker.IsFailed() {
+						allCompleted = false
+					}
 				}
 			}
 
@@ -209,10 +294,41 @@ func (o *Orchestrator) Run(ctx context.Context, cancel context.CancelFunc) error
 					log.Printf("[ORCHESTRATOR] Waiting for other workers to finish their remaining work...")
 					// Continue checking until all workers complete
 					for {
+						// Check for stop file or context cancellation
+						select {
+						case <-ctx.Done():
+							log.Printf("[ORCHESTRATOR] Context cancelled while waiting for workers, shutting down...")
+							o.StopAllWorkers(true)
+							return nil
+						default:
+							// Check for stop file
+							if _, err := os.Stat(stopFilePath); err == nil {
+								log.Printf("[ORCHESTRATOR] Stop file detected while waiting for workers, shutting down gracefully...")
+								o.StopAllWorkers(true)
+								os.Remove(stopFilePath)
+								return nil
+							}
+						}
+
+						// First, check status of all workers to update their status
+						o.checkWorkers()
+
 						allDone := true
 						for _, worker := range o.workers {
+							// If worker was started (has PID), it should be either running, completed, or failed
+							// If worker is still running, we're not done
 							if worker.IsRunning() {
 								allDone = false
+								// Only log occasionally to avoid log spam
+								if time.Since(worker.StartTime).Seconds() > 0 && int(time.Since(worker.StartTime).Seconds())%30 == 0 {
+									log.Printf("[ORCHESTRATOR] Worker %d is still running", worker.ID)
+								}
+								break
+							}
+							// If worker was started but not completed or failed, check again
+							if worker.PID > 0 && !worker.IsCompleted() && !worker.IsFailed() {
+								allDone = false
+								// Don't log this - it's normal during status checking
 								break
 							}
 						}
@@ -220,8 +336,6 @@ func (o *Orchestrator) Run(ctx context.Context, cancel context.CancelFunc) error
 							log.Printf("[ORCHESTRATOR] All workers have finished")
 							break
 						}
-						// Check status of all workers
-						o.checkWorkers()
 						time.Sleep(5 * time.Second) // Check every 5 seconds
 					}
 					// Now proceed with redistribution
@@ -279,9 +393,13 @@ func (o *Orchestrator) Run(ctx context.Context, cancel context.CancelFunc) error
 				log.Printf("[ORCHESTRATOR] Successfully restarted %d workers with new ranges", len(o.workers))
 			}
 
-			// Sleep before next check
-			time.Sleep(o.config.CheckInterval)
+			// After redistribution, continue to next iteration to check worker status
+			// This ensures we properly check if work is complete
+			continue
 		}
+
+		// Sleep before next check (only if we didn't continue above)
+		time.Sleep(o.config.CheckInterval)
 	}
 }
 
@@ -369,10 +487,29 @@ func (o *Orchestrator) startWorkers() error {
 
 func (o *Orchestrator) checkWorkers() *Worker {
 	for _, worker := range o.workers {
+		// Save previous status to detect changes
+		prevStatus := worker.Status
+		prevCompleted := worker.IsCompleted()
+		prevFailed := worker.IsFailed()
+
 		if err := worker.CheckStatus(); err != nil {
 			log.Printf("[ORCHESTRATOR] Error checking worker %d: %v", worker.ID, err)
 		}
 
+		// Check if status changed
+		if worker.Status != prevStatus {
+			log.Printf("[ORCHESTRATOR] Worker %d status changed: %s -> %s", worker.ID, prevStatus, worker.Status)
+		}
+
+		// Also log if completion status changed (even if Status string didn't change)
+		if !prevCompleted && worker.IsCompleted() {
+			log.Printf("[ORCHESTRATOR] Worker %d completed (PID %d)", worker.ID, worker.PID)
+		}
+		if !prevFailed && worker.IsFailed() {
+			log.Printf("[ORCHESTRATOR] Worker %d failed (PID %d)", worker.ID, worker.PID)
+		}
+
+		// Check status again after CheckStatus() call
 		if worker.IsCompleted() || worker.IsFailed() {
 			return worker
 		}
@@ -571,8 +708,12 @@ func VerifyCLIExists(cliPath string) error {
 	if err != nil {
 		return fmt.Errorf("failed to stat CLI executable: %w", err)
 	}
-	if info.Mode().Perm()&0111 == 0 {
-		return fmt.Errorf("CLI executable is not executable: %s", cliPath)
+	// On Unix systems, check executable permissions
+	// On Windows, files don't have executable permissions in the same way
+	if runtime.GOOS != "windows" {
+		if info.Mode().Perm()&0111 == 0 {
+			return fmt.Errorf("CLI executable is not executable: %s", cliPath)
+		}
 	}
 	return nil
 }

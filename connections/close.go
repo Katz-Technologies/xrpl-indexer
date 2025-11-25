@@ -69,6 +69,12 @@ func CloseXrplClient() {
 
 	closeWithTimeout("XRPL client", func() error {
 		if XrplClient != nil {
+			// Use recover to handle potential panic if connection is already closed
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("Panic while closing XRPL client (connection may already be closed): %v", r)
+				}
+			}()
 			return XrplClient.Close()
 		}
 		return nil
@@ -78,6 +84,12 @@ func CloseXrplClient() {
 func CloseXrplRPCClient() {
 	closeWithTimeout("XRPL RPC client", func() error {
 		if XrplRPCClient != nil {
+			// Use recover to handle potential panic if connection is already closed
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("Panic while closing XRPL RPC client (connection may already be closed): %v", r)
+				}
+			}()
 			return XrplRPCClient.Close()
 		}
 		return nil

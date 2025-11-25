@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -28,7 +29,13 @@ func ParseConfig() (*Config, error) {
 	flag.IntVar(&cfg.FromLedger, "from", 82000000, "From ledger index")
 	flag.IntVar(&cfg.ToLedger, "to", 82001000, "To ledger index")
 	flag.StringVar(&cfg.ConfigFile, "config", ".env", "Environment config file")
-	flag.StringVar(&cfg.CLIPath, "cli-path", "./bin/platform-cli", "Path to platform-cli executable")
+
+	// Set default CLI path based on OS
+	defaultCLIPath := "./bin/platform-cli"
+	if runtime.GOOS == "windows" {
+		defaultCLIPath = "./bin/platform-cli.exe"
+	}
+	flag.StringVar(&cfg.CLIPath, "cli-path", defaultCLIPath, "Path to platform-cli executable")
 	flag.DurationVar(&cfg.CheckInterval, "check-interval", 30*time.Second, "Interval to check worker status")
 	flag.BoolVar(&cfg.Verbose, "verbose", false, "Make the orchestrator more talkative")
 	flag.Int64Var(&cfg.MinDelay, "delay", 10, "Minimum delay (ms) between requests to XRPL server")
