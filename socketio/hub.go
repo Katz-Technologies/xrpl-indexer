@@ -250,3 +250,72 @@ func (h *Hub) EmitNewTokenDetected(event NewTokenDetectedEvent) {
 		Int("success_count", successCount).
 		Msg("Emitted new_token_detected event via SocketIO")
 }
+
+// EmitSubscriptionActivity sends subscription activity event with batch of transactions
+// Each transaction contains an array of subscribers who should be notified
+func (h *Hub) EmitSubscriptionActivity(event SubscriptionActivityEvent) {
+	h.mu.RLock()
+	clients := make([]*ClientConnection, 0, len(h.clients))
+	for _, c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+
+	if len(clients) == 0 {
+		logger.Log.Debug().
+			Int("activities_count", len(event.Activities)).
+			Msg("EmitSubscriptionActivity: no clients connected")
+		return
+	}
+
+	if len(event.Activities) == 0 {
+		logger.Log.Debug().Msg("EmitSubscriptionActivity: no activities to send")
+		return
+	}
+
+	jsonEvent, err := json.Marshal(event)
+	if err != nil {
+		logger.Log.Error().Err(err).Msg("EmitSubscriptionActivity: failed to marshal event")
+		return
+	}
+
+	successCount := 0
+	for _, cli := range clients {
+		var frame string
+		if cli.ns == "/" {
+			frame = fmt.Sprintf(`42["subscription_activity",%s]`, string(jsonEvent))
+		} else {
+			frame = fmt.Sprintf(`42%s,["subscription_activity",%s]`, cli.ns, string(jsonEvent))
+		}
+
+		cli.mu.Lock()
+		// Set write deadline to prevent hanging
+		cli.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		err := cli.conn.WriteMessage(websocket.TextMessage, []byte(frame))
+		cli.conn.SetWriteDeadline(time.Time{}) // Clear deadline
+		cli.mu.Unlock()
+
+		if err != nil {
+			logger.Log.Warn().Err(err).Str("sid", cli.sid).Str("ns", cli.ns).Msg("EmitSubscriptionActivity failed - connection may be closed")
+		} else {
+			successCount++
+			logger.Log.Debug().
+				Str("sid", cli.sid).
+				Int("activities_count", len(event.Activities)).
+				Msg("EmitSubscriptionActivity sent successfully")
+		}
+	}
+
+	// Count total subscribers across all activities
+	totalSubscribers := 0
+	for _, activity := range event.Activities {
+		totalSubscribers += len(activity.Subscribers)
+	}
+
+	logger.Log.Info().
+		Int("activities_count", len(event.Activities)).
+		Int("total_subscribers", totalSubscribers).
+		Int("clients_count", len(clients)).
+		Int("success_count", successCount).
+		Msg("Emitted subscription_activity batch event via SocketIO")
+}

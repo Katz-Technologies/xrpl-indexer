@@ -112,3 +112,23 @@ SETTINGS
 -- Note: This index may already exist. If you get an error, the index is already created.
 -- You can safely ignore "index with this name already exists" errors or run this manually once.
 ALTER TABLE xrpl.known_tokens ADD INDEX IF NOT EXISTS idx_currency_issuer (currency, issuer) TYPE set(0) GRANULARITY 64;
+
+-- ============================
+-- Subscription Links (таблица связка подписок)
+-- ============================
+CREATE TABLE IF NOT EXISTS xrpl.subscription_links
+(
+  from_address String,                  -- адрес, который подписан
+  to_address String,               -- адрес на который подписан
+)
+ENGINE = MergeTree()
+ORDER BY (from_address, to_address)
+SETTINGS
+  index_granularity = 8192,
+  index_granularity_bytes = 10485760;
+
+-- Secondary indexes for subscription_links
+-- Note: These indexes may already exist. If you get an error, the indexes are already created.
+-- You can safely ignore "index with this name already exists" errors or run these manually once.
+ALTER TABLE xrpl.subscription_links ADD INDEX IF NOT EXISTS idx_subscriber (from_address) TYPE set(0) GRANULARITY 64;
+ALTER TABLE xrpl.subscription_links ADD INDEX IF NOT EXISTS idx_subscribed_to (to_address) TYPE set(0) GRANULARITY 64;
