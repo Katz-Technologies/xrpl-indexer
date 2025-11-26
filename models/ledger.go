@@ -67,6 +67,7 @@ func (ledger *LedgerStream) Validate() error {
 }
 
 // Fetches all transaction for a specific ledger from XRPL server
+// Uses retry logic with exponential backoff to handle connection failures
 func (ledger *LedgerStream) FetchTransactions() (xrpl.BaseResponse, error) {
 	if err := ledger.Validate(); err != nil {
 		return nil, errors.New("invalid ledger_index")
@@ -81,26 +82,79 @@ func (ledger *LedgerStream) FetchTransactions() (xrpl.BaseResponse, error) {
 		"expand":       true,
 	}
 
-	logger.Log.Debug().
-		Uint32("ledger_index", ledger.LedgerIndex).
-		Str("request_id", requestId).
-		Msg("Sending ledger request to XRPL server")
-
 	// Prefer RPC client to avoid contention with streaming client
 	client := connections.GetXRPLRequestClient()
 
-	// Check connection health before making request
-	if err := connections.CheckXRPLRPCConnectionHealth(); err != nil {
+	// Retry logic with exponential backoff
+	// Increased retries and timeout to handle slow XRPL server responses
+	maxRetries := 5
+	baseDelay := 3 * time.Second
+	maxDelay := 15 * time.Second
+	requestTimeout := 60 * time.Second // Increased from 30s to handle large ledgers
+
+	var lastErr error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		// Check connection health before making request
+		if err := connections.CheckXRPLRPCConnectionHealth(); err != nil {
+			logger.Log.Warn().
+				Uint32("ledger_index", ledger.LedgerIndex).
+				Str("request_id", requestId).
+				Int("attempt", attempt+1).
+				Err(err).
+				Msg("XRPL RPC connection health check failed before request")
+			lastErr = fmt.Errorf("connection health check failed: %w", err)
+			// Still retry if it's a retryable error
+			if !connections.IsRetryableError(err) {
+				return nil, lastErr
+			}
+		} else {
+			// Connection is healthy, try the request
+			response, err := ledger.fetchTransactionsWithTimeout(client, request, requestId, requestTimeout)
+			if err == nil {
+				return response, nil
+			}
+			lastErr = err
+		}
+
+		// Check if it's a retryable error
+		if !connections.IsRetryableError(lastErr) {
+			// Non-retryable error, return immediately
+			return nil, fmt.Errorf("non-retryable error: %w", lastErr)
+		}
+
+		// Don't retry on last attempt
+		if attempt == maxRetries-1 {
+			break
+		}
+
+		// Calculate delay with exponential backoff
+		delay := baseDelay * time.Duration(1<<uint(attempt))
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+
+		// Log retry attempt
 		logger.Log.Warn().
+			Err(lastErr).
 			Uint32("ledger_index", ledger.LedgerIndex).
 			Str("request_id", requestId).
-			Err(err).
-			Msg("XRPL RPC connection health check failed before request")
-		return nil, fmt.Errorf("connection health check failed: %w", err)
+			Int("attempt", attempt+1).
+			Int("max_retries", maxRetries).
+			Dur("retry_in", delay).
+			Msg("XRPL ledger request failed, retrying")
+
+		// Wait before retry
+		time.Sleep(delay)
 	}
 
+	// All retries exhausted
+	return nil, fmt.Errorf("failed to fetch ledger after %d retries: %w", maxRetries, lastErr)
+}
+
+// fetchTransactionsWithTimeout makes a single request with timeout
+func (ledger *LedgerStream) fetchTransactionsWithTimeout(client *xrpl.Client, request xrpl.BaseRequest, requestId string, timeout time.Duration) (xrpl.BaseResponse, error) {
 	// Create context with timeout for the request
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	// Log request start time
@@ -108,7 +162,7 @@ func (ledger *LedgerStream) FetchTransactions() (xrpl.BaseResponse, error) {
 	logger.Log.Debug().
 		Uint32("ledger_index", ledger.LedgerIndex).
 		Str("request_id", requestId).
-		Msg("Starting XRPL request with 30s timeout")
+		Msg("Starting XRPL request with timeout")
 
 	// Make the request with timeout using goroutine and channel
 	type result struct {
@@ -131,29 +185,30 @@ func (ledger *LedgerStream) FetchTransactions() (xrpl.BaseResponse, error) {
 	case res := <-resultChan:
 		response, err = res.response, res.err
 	case <-ctx.Done():
-		err = fmt.Errorf("request timed out after 30 seconds: %w", ctx.Err())
+		err = fmt.Errorf("request timed out after %v: %w", timeout, ctx.Err())
 	}
+
 	if err != nil {
 		requestDuration := time.Since(startTime)
-		logger.Log.Error().
+		logger.Log.Debug().
 			Uint32("ledger_index", ledger.LedgerIndex).
 			Str("request_id", requestId).
 			Dur("request_duration", requestDuration).
 			Err(err).
-			Msg("Failed to fetch transactions from XRPL server")
+			Msg("XRPL request failed")
 
 		// Check if it's a timeout error
 		if ctx.Err() == context.DeadlineExceeded {
-			logger.Log.Warn().
+			logger.Log.Debug().
 				Uint32("ledger_index", ledger.LedgerIndex).
 				Str("request_id", requestId).
 				Dur("request_duration", requestDuration).
-				Msg("XRPL request timed out after 30 seconds")
+				Msg("XRPL request timed out")
 		}
 
 		// Check if it's a WebSocket connection error
 		if isWebSocketError(err) {
-			logger.Log.Warn().
+			logger.Log.Debug().
 				Uint32("ledger_index", ledger.LedgerIndex).
 				Str("request_id", requestId).
 				Dur("request_duration", requestDuration).

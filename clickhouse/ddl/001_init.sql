@@ -40,9 +40,15 @@ SETTINGS
   index_granularity = 8192,
   index_granularity_bytes = 10485760;
 
--- Secondary index for empty ledgers
-ALTER TABLE xrpl.empty_ledgers ADD INDEX idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
-ALTER TABLE xrpl.empty_ledgers ADD INDEX idx_close_time (close_time) TYPE minmax GRANULARITY 4;
+-- Secondary indexes for empty ledgers
+-- Note: These indexes may already exist. If you get an error, the indexes are already created.
+-- You can safely ignore "index with this name already exists" errors or run these manually once.
+ALTER TABLE xrpl.empty_ledgers ADD INDEX IF NOT EXISTS idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
+ALTER TABLE xrpl.empty_ledgers ADD INDEX IF NOT EXISTS idx_close_time (close_time) TYPE minmax GRANULARITY 4;
+
+-- Try to add indexes (will fail silently if they exist - this is expected)
+-- Using a workaround: check system.data_skipping_indices first
+-- For now, comment out and create manually if needed, or use the script below
 
 -- ============================
 -- Money Flow (объединенная таблица с данными транзакций)
@@ -75,9 +81,34 @@ SETTINGS
   index_granularity = 8192,
   index_granularity_bytes = 10485760;
 
--- Secondary indexes
-ALTER TABLE xrpl.money_flow ADD INDEX idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
-ALTER TABLE xrpl.money_flow ADD INDEX idx_close_time (close_time) TYPE minmax GRANULARITY 4;
-ALTER TABLE xrpl.money_flow ADD INDEX idx_from_to (from_address, to_address) TYPE set(0) GRANULARITY 64;
-ALTER TABLE xrpl.money_flow ADD INDEX idx_kind (kind) TYPE set(0) GRANULARITY 64;
-ALTER TABLE xrpl.money_flow ADD INDEX idx_assets (from_currency, from_issuer_address, to_currency, to_issuer_address) TYPE set(0) GRANULARITY 64;
+-- Secondary indexes for money_flow
+-- Note: These indexes may already exist. If you get an error, the indexes are already created.
+-- You can safely ignore "index with this name already exists" errors or run these manually once.
+ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
+ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_close_time (close_time) TYPE minmax GRANULARITY 4;
+ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_from_to (from_address, to_address) TYPE set(0) GRANULARITY 64;
+ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_kind (kind) TYPE set(0) GRANULARITY 64;
+ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_assets (from_currency, from_issuer_address, to_currency, to_issuer_address) TYPE set(0) GRANULARITY 64;
+
+-- ============================
+-- Known Tokens (известные токены)
+-- ============================
+CREATE TABLE IF NOT EXISTS xrpl.known_tokens
+(
+  currency String,
+  issuer String,
+  first_seen_ledger_index UInt32,
+  first_seen_timestamp DateTime64(3, 'UTC'),
+  created_at DateTime64(3, 'UTC') DEFAULT now64(),
+  version UInt64 DEFAULT now64()
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY (currency, issuer)
+SETTINGS
+  index_granularity = 8192,
+  index_granularity_bytes = 10485760;
+
+-- Secondary index for known tokens
+-- Note: This index may already exist. If you get an error, the index is already created.
+-- You can safely ignore "index with this name already exists" errors or run this manually once.
+ALTER TABLE xrpl.known_tokens ADD INDEX IF NOT EXISTS idx_currency_issuer (currency, issuer) TYPE set(0) GRANULARITY 64;
