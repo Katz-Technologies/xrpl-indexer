@@ -626,10 +626,6 @@ func checkAndEmitSubscriptionActivities(batch []MoneyFlowRow) {
 		return
 	}
 
-	logger.Log.Debug().
-		Int("batch_size", len(batch)).
-		Msg("checkAndEmitSubscriptionActivities: starting check")
-
 	// Filter batch for swap or dexOffer activities (as per original requirement)
 	// But also log all kinds for debugging
 	relevantRows := make([]MoneyFlowRow, 0)
@@ -639,16 +635,6 @@ func checkAndEmitSubscriptionActivities(batch []MoneyFlowRow) {
 		if row.Kind == "swap" || row.Kind == "dexOffer" {
 			relevantRows = append(relevantRows, row)
 		}
-	}
-
-	logger.Log.Debug().
-		Int("relevant_rows", len(relevantRows)).
-		Interface("kind_counts", kindCounts).
-		Msg("checkAndEmitSubscriptionActivities: filtered rows by kind")
-
-	if len(relevantRows) == 0 {
-		logger.Log.Debug().Msg("checkAndEmitSubscriptionActivities: no swap/dexOffer rows found")
-		return
 	}
 
 	// Collect unique addresses (both from and to)
@@ -662,21 +648,11 @@ func checkAndEmitSubscriptionActivities(batch []MoneyFlowRow) {
 		}
 	}
 
-	if len(addressSet) == 0 {
-		logger.Log.Debug().Msg("checkAndEmitSubscriptionActivities: no addresses found in relevant rows")
-		return
-	}
-
 	// Build list of addresses for SQL IN clause
 	addresses := make([]string, 0, len(addressSet))
 	for addr := range addressSet {
 		addresses = append(addresses, addr)
 	}
-
-	logger.Log.Debug().
-		Int("unique_addresses", len(addresses)).
-		Strs("sample_addresses", addresses[:min(5, len(addresses))]).
-		Msg("checkAndEmitSubscriptionActivities: checking subscriptions for addresses")
 
 	// Query subscription_links to find subscribers
 	// We need to find all subscription_links where to_address is in our list
