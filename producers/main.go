@@ -3,10 +3,12 @@ package producers
 import (
 	"encoding/json"
 	"sync/atomic"
+	"time"
 
 	"github.com/xrpscan/platform/connections"
 	"github.com/xrpscan/platform/logger"
 	"github.com/xrpscan/platform/models"
+	"github.com/xrpscan/platform/socketio"
 )
 
 var lastSeenLedgerIndex uint32
@@ -23,6 +25,14 @@ func RunProducers() {
 					Str("ledger_hash", ls.LedgerHash).
 					Uint32("txn_count", ls.TxnCount).
 					Msg("New ledger closed")
+
+				// Emit SocketIO event for real-time ledger (NOT for backfill)
+				socketio.GetHub().EmitLedgerClosed(socketio.LedgerClosedEvent{
+					LedgerIndex: ls.LedgerIndex,
+					LedgerHash:  ls.LedgerHash,
+					TxnCount:    ls.TxnCount,
+					Timestamp:   time.Now().Unix(),
+				})
 
 				// Detect gaps and backfill if we skipped indices due to reconnects
 				prev := atomic.LoadUint32(&lastSeenLedgerIndex)

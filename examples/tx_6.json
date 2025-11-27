@@ -1,0 +1,135 @@
+{
+    "Account": "rpUZ9BYTn58KzWxiU7booNsNbNfp2Mn4AJ",
+    "Amount": {
+        "currency": "XRG",
+        "issuer": "r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi",
+        "value": "1994.825"
+    },
+    "Destination": "rnGeThR5nYdBgWYvUaaDEfX5Nd3fTgXorp",
+    "DestinationTag": 0,
+    "Fee": "12",
+    "LastLedgerSequence": 99197605,
+    "Memos": [
+        {
+            "Memo": {
+                "MemoData": "5472616E73616374696F6E20696E6974696174656420627920786D61676E657469632E6F7267"
+            }
+        }
+    ],
+    "Sequence": 97579592,
+    "SigningPubKey": "024BC39863F8C8DE9D4BA9FD466AC8C91B14837BA08D8939D15EF4E0A463EC6E43",
+    "SourceTag": 10011010,
+    "TransactionType": "Payment",
+    "TxnSignature": "304502210098136D283DC63F267BF8FF36C5EE25AC42221487D15D67ACFAF557B9694D132D02200C2BE9C26CC7B862269656955A6B344EB978071B415D158EC96E518FF8BA78D2",
+    "hash": "D6BFA5B6177D627E876633CE54E369D53D8535C706A3D17A773EBDAAE05C7BB1",
+    "DeliverMax": {
+        "currency": "XRG",
+        "issuer": "r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi",
+        "value": "1994.825"
+    },
+    "ctid": "C5E9A29300340000",
+    "meta": {
+        "AffectedNodes": [
+            {
+                "ModifiedNode": {
+                    "FinalFields": {
+                        "Balance": {
+                            "currency": "XRG",
+                            "issuer": "rrrrrrrrrrrrrrrrrrrrBZbvji",
+                            "value": "3739.825"
+                        },
+                        "Flags": 1114112,
+                        "HighLimit": {
+                            "currency": "XRG",
+                            "issuer": "r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi",
+                            "value": "0"
+                        },
+                        "HighNode": "7",
+                        "LowLimit": {
+                            "currency": "XRG",
+                            "issuer": "rnGeThR5nYdBgWYvUaaDEfX5Nd3fTgXorp",
+                            "value": "1000000000000000e-2"
+                        },
+                        "LowNode": "0"
+                    },
+                    "LedgerEntryType": "RippleState",
+                    "LedgerIndex": "1C0F6E09A71D129F68AB45BBB57E3BCB253A4C7BF16B22E1820ED0F768CFECFA",
+                    "PreviousFields": {
+                        "Balance": {
+                            "currency": "XRG",
+                            "issuer": "rrrrrrrrrrrrrrrrrrrrBZbvji",
+                            "value": "1745"
+                        }
+                    },
+                    "PreviousTxnID": "955EA61FF6F3A3B7E845B236AE3EB57931A9708652373A9392B7831305870E39",
+                    "PreviousTxnLgrSeq": 99152754
+                }
+            },
+            {
+                "ModifiedNode": {
+                    "FinalFields": {
+                        "Balance": {
+                            "currency": "XRG",
+                            "issuer": "rrrrrrrrrrrrrrrrrrrrBZbvji",
+                            "value": "2725195.0547619"
+                        },
+                        "Flags": 1114112,
+                        "HighLimit": {
+                            "currency": "XRG",
+                            "issuer": "r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi",
+                            "value": "0"
+                        },
+                        "HighNode": "8",
+                        "LowLimit": {
+                            "currency": "XRG",
+                            "issuer": "rpUZ9BYTn58KzWxiU7booNsNbNfp2Mn4AJ",
+                            "value": "98943967.7153109"
+                        },
+                        "LowNode": "0"
+                    },
+                    "LedgerEntryType": "RippleState",
+                    "LedgerIndex": "3F4766ECBC154A362899083E2C086F9F32762998C4CCEB09760B5EF64AF6D3C6",
+                    "PreviousFields": {
+                        "Balance": {
+                            "currency": "XRG",
+                            "issuer": "rrrrrrrrrrrrrrrrrrrrBZbvji",
+                            "value": "2727189.8797619"
+                        }
+                    },
+                    "PreviousTxnID": "8A0B4C2999E58388AFD0FAD9531196C9DF2347B82DCDDF5E9C992FA365F0ADF3",
+                    "PreviousTxnLgrSeq": 99177811
+                }
+            },
+            {
+                "ModifiedNode": {
+                    "FinalFields": {
+                        "Account": "rpUZ9BYTn58KzWxiU7booNsNbNfp2Mn4AJ",
+                        "Balance": "4913574",
+                        "Flags": 0,
+                        "OwnerCount": 4,
+                        "Sequence": 97579593
+                    },
+                    "LedgerEntryType": "AccountRoot",
+                    "LedgerIndex": "F0F02E4A547EA92F91FEE675C98803CBD88A98751ACBA5E136F74FABD9E3B629",
+                    "PreviousFields": {
+                        "Balance": "4913586",
+                        "Sequence": 97579592
+                    },
+                    "PreviousTxnID": "0997686A1CE1BDBEC0BD8ADFC3C7E33DCE4B05EA5AB355055D47A56B200EE60B",
+                    "PreviousTxnLgrSeq": 99177837
+                }
+            }
+        ],
+        "TransactionIndex": 52,
+        "TransactionResult": "tesSUCCESS",
+        "delivered_amount": {
+            "currency": "XRG",
+            "issuer": "r3yW6SkxULrbtaGT4EQTtKc8XkvoFBkPBi",
+            "value": "1994.825"
+        }
+    },
+    "validated": true,
+    "date": 812528180,
+    "ledger_index": 99197587,
+    "inLedger": 99197587
+}

@@ -1,0 +1,63 @@
+{
+    "Account": "rHcWmKpDf4GJiJjuCyXfTwCMqhWsjzecN9",
+    "Amount": "1",
+    "Destination": "rUrYCcn3UkgC2ZXDWDvWT1D8VmM2X5Yiws",
+    "Fee": "11",
+    "Flags": 0,
+    "LastLedgerSequence": 99197686,
+    "Sequence": 96554652,
+    "SigningPubKey": "ED0B78B1B929C582229ED70B22ABDFC61B6E980A859305EB608E86ABFEED42F0D3",
+    "TransactionType": "Payment",
+    "TxnSignature": "C4FBBA56769F120D4B4F8AF9FA2AE5CAA398B60C84FDFDF66F7AEB2B95BF0B556BB9BD33CAA081E19422AD5E59E61B2CDB3363D0CA55157921D078BCE9C3F30F",
+    "hash": "64007BA3F6DD7BA08675365E3F4D2103FF51572A0F0A76EB9E1A8FAC52118899",
+    "DeliverMax": "1",
+    "ctid": "C5E9A29300010000",
+    "meta": {
+        "AffectedNodes": [
+            {
+                "ModifiedNode": {
+                    "FinalFields": {
+                        "Account": "rHcWmKpDf4GJiJjuCyXfTwCMqhWsjzecN9",
+                        "Balance": "13973637",
+                        "Flags": 0,
+                        "OwnerCount": 0,
+                        "Sequence": 96554653
+                    },
+                    "LedgerEntryType": "AccountRoot",
+                    "LedgerIndex": "CF2D2145FFE34EA4E5A916A0AA6B25F98D72FEA6BDFD8062974C782F3258021A",
+                    "PreviousFields": {
+                        "Balance": "13973649",
+                        "Sequence": 96554652
+                    },
+                    "PreviousTxnID": "7689920319B9153CE97609932AEA261B9F9FC25CC024409467B3290560CC7DF2",
+                    "PreviousTxnLgrSeq": 99197584
+                }
+            },
+            {
+                "ModifiedNode": {
+                    "FinalFields": {
+                        "Account": "rUrYCcn3UkgC2ZXDWDvWT1D8VmM2X5Yiws",
+                        "Balance": "3076408190424",
+                        "Flags": 0,
+                        "OwnerCount": 0,
+                        "Sequence": 96981709
+                    },
+                    "LedgerEntryType": "AccountRoot",
+                    "LedgerIndex": "E12360E56809FAA0EC138501D8F5AC994A268507E8E618A31D2605F89E713303",
+                    "PreviousFields": {
+                        "Balance": "3076408190423"
+                    },
+                    "PreviousTxnID": "AFF2CFFB75C2A31DE1DCC3B3FE0FE2257E3CA09D57BDC1CD0368DDF6E17F5479",
+                    "PreviousTxnLgrSeq": 99197582
+                }
+            }
+        ],
+        "TransactionIndex": 1,
+        "TransactionResult": "tesSUCCESS",
+        "delivered_amount": "1"
+    },
+    "validated": true,
+    "date": 812528180,
+    "ledger_index": 99197587,
+    "inLedger": 99197587
+}

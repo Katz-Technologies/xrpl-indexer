@@ -1,5 +1,45 @@
 ---
 services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:${ZOOKEEPER_VERSION}
+    container_name: zookeeper
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    deploy:
+      resources:
+        limits:
+          memory: ${ZOOKEEPER_MEMORY_LIMIT}
+
+  kafka-broker1:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION}
+    container_name: kafka-broker1
+    ports:
+      - "${KAFKA_PORT}:9092"
+    depends_on:
+      - zookeeper
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka-broker1:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 1
+      KAFKA_LOG_CLEANUP_POLICY: delete
+    deploy:
+      resources:
+        limits:
+          memory: ${KAFKA_BROKER_MEMORY_LIMIT}
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse
@@ -23,6 +63,8 @@ services:
       timeout: 3s
       retries: 30
       start_period: 10s
+    links:
+      - kafka-broker1:broker
       
 
   clickhouse-init:
@@ -31,12 +73,49 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+      kafka-broker1:
+        condition: service_started
     volumes:
       - ./clickhouse/ddl:/ddl:ro
     entrypoint: /bin/sh
     command: -c "for f in /ddl/*.sql; do echo Running $$f; clickhouse-client --host clickhouse --user=katz --password=katz-password --multiquery < $$f; done"
     restart: "no"
 
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - kafka-broker1
+      - zookeeper
+    ports:
+      - "8080:8080"
+    # 👇 даём контейнеру алиас на брокер без правок самого брокера
+    links:
+      - kafka-broker1:broker
+    environment:
+      KAFKA_UI_BASE_PATH: /kafka-ui
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "broker:29092" # было kafka-broker1:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: "zookeeper:2181"
+      KAFKA_UI_AUTH_TYPE: "disabled"
+
+  kafka-init:
+    image: confluentinc/cp-kafka:${KAFKA_VERSION}
+    depends_on:
+      kafka-broker1:
+        condition: service_started
+    volumes:
+      - ./scripts:/scripts:ro
+    entrypoint: /bin/bash
+    command: /scripts/kafka-init.sh
+    restart: "no"
+
 volumes:
+  zookeeper-data:
+    driver: local
+  zookeeper-logs:
+    driver: local
+  kafka-data:
+    driver: local
   clickhouse-data:
     driver: local

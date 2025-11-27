@@ -8,6 +8,15 @@ import (
 	"github.com/xrpscan/xrpl-go"
 )
 
+/*
+* TLDR - Do not subscribe to xrpl.StreamTypeTransactions
+*
+* XRPL `transaction` stream messages are incompatible with rippled's native
+* transaction format. Therefore, this service does not process transactions
+* streamed on `xrpl.StreamTypeTransactions` stream. Instead, we listen to the
+* ledger stream, fetch transactions from rippled, and add those transactions to
+* the Kafka topic.
+ */
 func SubscribeStreams() {
 	// Retry subscribe with exponential backoff until successful
 	backoff := time.Second

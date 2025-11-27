@@ -343,6 +343,8 @@ func (cmd *BackfillCommand) backfillLedgerWithRetry(ledgerIndex int) error {
 		return fmt.Errorf("failed to marshal ledger: %w", err)
 	}
 
+	// Ledger production to Kafka is no longer needed - transactions are processed directly
+
 	// Try to backfill transactions
 	if cmd.fVerbose {
 		log.Printf("[BACKFILL] Fetching transactions for ledger %d...", ledgerIndex)

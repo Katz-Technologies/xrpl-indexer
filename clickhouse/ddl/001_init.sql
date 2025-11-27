@@ -40,15 +40,9 @@ SETTINGS
   index_granularity = 8192,
   index_granularity_bytes = 10485760;
 
--- Secondary indexes for empty ledgers
--- Note: These indexes may already exist. If you get an error, the indexes are already created.
--- You can safely ignore "index with this name already exists" errors or run these manually once.
-ALTER TABLE xrpl.empty_ledgers ADD INDEX IF NOT EXISTS idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
-ALTER TABLE xrpl.empty_ledgers ADD INDEX IF NOT EXISTS idx_close_time (close_time) TYPE minmax GRANULARITY 4;
-
--- Try to add indexes (will fail silently if they exist - this is expected)
--- Using a workaround: check system.data_skipping_indices first
--- For now, comment out and create manually if needed, or use the script below
+-- Secondary index for empty ledgers
+ALTER TABLE xrpl.empty_ledgers ADD INDEX idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
+ALTER TABLE xrpl.empty_ledgers ADD INDEX idx_close_time (close_time) TYPE minmax GRANULARITY 4;
 
 -- ============================
 -- Money Flow (объединенная таблица с данными транзакций)
@@ -81,70 +75,67 @@ SETTINGS
   index_granularity = 8192,
   index_granularity_bytes = 10485760;
 
--- Secondary indexes for money_flow
--- Note: These indexes may already exist. If you get an error, the indexes are already created.
--- You can safely ignore "index with this name already exists" errors or run these manually once.
-ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
-ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_close_time (close_time) TYPE minmax GRANULARITY 4;
-ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_from_to (from_address, to_address) TYPE set(0) GRANULARITY 64;
-ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_kind (kind) TYPE set(0) GRANULARITY 64;
-ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_assets (from_currency, from_issuer_address, to_currency, to_issuer_address) TYPE set(0) GRANULARITY 64;
+-- Secondary indexes
+ALTER TABLE xrpl.money_flow ADD INDEX idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
+ALTER TABLE xrpl.money_flow ADD INDEX idx_close_time (close_time) TYPE minmax GRANULARITY 4;
+ALTER TABLE xrpl.money_flow ADD INDEX idx_from_to (from_address, to_address) TYPE set(0) GRANULARITY 64;
+ALTER TABLE xrpl.money_flow ADD INDEX idx_kind (kind) TYPE set(0) GRANULARITY 64;
+ALTER TABLE xrpl.money_flow ADD INDEX idx_assets (from_currency, from_issuer_address, to_currency, to_issuer_address) TYPE set(0) GRANULARITY 64;
+
+-- =========================================================
+-- Kafka ingestion (обновленные таблицы без UUID)
+-- =========================================================
+
+-- Убрано ch_assets_kafka - таблицы assets больше нет
+
+CREATE TABLE IF NOT EXISTS xrpl.ch_moneyflows_kafka (value String)
+ENGINE = Kafka
+SETTINGS kafka_broker_list = 'broker:29092',
+         kafka_topic_list = 'xrpl-platform-ch-moneyflows',
+         kafka_group_name = 'clickhouse-ch-mf',
+         kafka_format = 'RawBLOB',
+         kafka_num_consumers = 2,
+         kafka_handle_error_mode = 'stream',
+         kafka_skip_broken_messages = 1;
 
 -- ============================
--- Known Tokens (известные токены)
+-- Materialized Views (обновленные без UUID)
 -- ============================
-CREATE TABLE IF NOT EXISTS xrpl.known_tokens
-(
-  currency String,
-  issuer String,
-  first_seen_ledger_index UInt32,
-  first_seen_timestamp DateTime64(3, 'UTC'),
-  created_at DateTime64(3, 'UTC') DEFAULT now64(),
-  version UInt64 DEFAULT now64()
-)
-ENGINE = ReplacingMergeTree(version)
-ORDER BY (currency, issuer)
-SETTINGS
-  index_granularity = 8192,
-  index_granularity_bytes = 10485760;
 
--- Secondary index for known tokens
--- Note: This index may already exist. If you get an error, the index is already created.
--- You can safely ignore "index with this name already exists" errors or run this manually once.
-ALTER TABLE xrpl.known_tokens ADD INDEX IF NOT EXISTS idx_currency_issuer (currency, issuer) TYPE set(0) GRANULARITY 64;
+-- Убрано ch_mv_assets - таблицы assets больше нет
 
--- ============================
--- Subscription Links (таблица связка подписок)
--- ============================
-CREATE TABLE IF NOT EXISTS xrpl.subscription_links
-(
-  from_address String,                  -- адрес, который подписан
-  to_address String,               -- адрес на который подписан
-)
-ENGINE = MergeTree()
-ORDER BY (from_address, to_address)
-SETTINGS
-  index_granularity = 8192,
-  index_granularity_bytes = 10485760;
-
--- Secondary indexes for subscription_links
--- Note: These indexes may already exist. If you get an error, the indexes are already created.
--- You can safely ignore "index with this name already exists" errors or run these manually once.
-ALTER TABLE xrpl.subscription_links ADD INDEX IF NOT EXISTS idx_subscriber (from_address) TYPE set(0) GRANULARITY 64;
-ALTER TABLE xrpl.subscription_links ADD INDEX IF NOT EXISTS idx_subscribed_to (to_address) TYPE set(0) GRANULARITY 64;
-
-CREATE TABLE IF NOT EXISTS xrpl.new_tokens
-(
-  currency_code String,
-  issuer String,
-  first_seen_ledger_index UInt32,
-  first_seen_in_ledger_index UInt32,
-)
-ENGINE = MergeTree()
-ORDER BY (first_seen_ledger_index, first_seen_in_ledger_index)
-SETTINGS
-  index_granularity = 8192,
-  index_granularity_bytes = 10485760;
-
-ALTER TABLE xrpl.new_tokens ADD INDEX IF NOT EXISTS idx_first_seen_ledger_index (first_seen_ledger_index) TYPE minmax GRANULARITY 4;
-ALTER TABLE xrpl.new_tokens ADD INDEX IF NOT EXISTS idx_first_seen_in_ledger_index (first_seen_in_ledger_index) TYPE minmax GRANULARITY 4;
+CREATE MATERIALIZED VIEW IF NOT EXISTS xrpl.ch_mv_money_flows TO xrpl.money_flow AS
+SELECT
+  anyLast(JSONExtractString(value, 'tx_hash')) AS tx_hash,
+  anyLast(toUInt32(JSONExtract(value, 'ledger_index', 'Int64'))) AS ledger_index,
+  anyLast(toUInt32(JSONExtract(value, 'in_ledger_index', 'Int64'))) AS in_ledger_index,
+  anyLast(toDateTime64(JSONExtract(value, 'close_time_unix', 'Int64'), 3, 'UTC')) AS close_time,
+  anyLast(toUInt64(JSONExtract(value, 'fee_drops', 'Int64'))) AS fee_drops,
+  anyLast(JSONExtractString(value, 'from_address')) AS from_address,
+  anyLast(JSONExtractString(value, 'to_address')) AS to_address,
+  anyLast(JSONExtractString(value, 'from_currency')) AS from_currency,
+  anyLast(JSONExtractString(value, 'from_issuer_address')) AS from_issuer_address,
+  anyLast(JSONExtractString(value, 'to_currency')) AS to_currency,
+  anyLast(JSONExtractString(value, 'to_issuer_address')) AS to_issuer_address,
+  anyLast(CAST(JSONExtractString(value, 'from_amount'), 'Decimal(38,18)')) AS from_amount,
+  anyLast(CAST(JSONExtractString(value, 'to_amount'), 'Decimal(38,18)')) AS to_amount,
+  anyLast(CAST(JSONExtractString(value, 'init_from_amount'), 'Decimal(38,18)')) AS init_from_amount,
+  anyLast(CAST(JSONExtractString(value, 'init_to_amount'), 'Decimal(38,18)')) AS init_to_amount,
+  anyLast(CAST(JSONExtractString(value, 'quote'), 'Decimal(38,18)')) AS quote,
+  anyLast(
+    CAST(
+      JSONExtractString(value, 'kind'),
+      'Enum8(''unknown''=0, ''transfer''=1, ''dexOffer''=2, ''swap''=3, ''fee''=4, ''burn''=5, ''loss''=6, ''payout''=7)'
+    )
+  ) AS kind,
+  now64() AS version
+FROM xrpl.ch_moneyflows_kafka
+GROUP BY (
+  JSONExtractString(value, 'tx_hash'), 
+  JSONExtractString(value, 'from_address'), 
+  JSONExtractString(value, 'to_address'),
+  JSONExtractString(value, 'from_currency'),
+  JSONExtractString(value, 'from_issuer_address'),
+  JSONExtractString(value, 'to_currency'),
+  JSONExtractString(value, 'to_issuer_address')
+);

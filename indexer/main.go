@@ -3,8 +3,18 @@ package indexer
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
+
+	"github.com/segmentio/kafka-go"
+	"github.com/xrpscan/platform/config"
+	"github.com/xrpscan/platform/logger"
 )
+
+func PrintMessage(m kafka.Message) {
+	msg := fmt.Sprintf("Message on topic(%v), partition(%v), offset(%v): %s", m.Topic, m.Partition, m.Offset, string(m.Key))
+	logger.Log.Info().Msg(msg)
+}
 
 func GetLedgerIndex(message []byte) (int, error) {
 	// message is in JSON format
@@ -32,4 +42,10 @@ func GetLedgerIndex(message []byte) (int, error) {
 
 	// Return error if ledger_index is encoded in an unknown type
 	return 0, errors.New("GetLedgerIndex: ledger_index not found")
+}
+
+// Deprecated: kept for compatibility where referenced; no-op generator
+func GetIndexName(documentType string, ledger_index int) string {
+	suffix := ledger_index / 1000000
+	return fmt.Sprintf("%s.%s-%dm", config.EnvKafkaTopicNamespace(), documentType, suffix)
 }

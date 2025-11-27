@@ -23,7 +23,6 @@ func root(args []string) error {
 
 	cmds := []Runner{
 		NewBackfillCommand(),
-		NewImportTokensCommand(),
 	}
 
 	for _, cmd := range cmds {
@@ -41,16 +40,8 @@ func root(args []string) error {
 }
 
 func main() {
-	// Recover from panics
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "Panic: %v\n", r)
-			os.Exit(1)
-		}
-	}()
-
 	if err := root(os.Args[1:]); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
 }
