@@ -112,8 +112,6 @@ func generateVersion() uint64 {
 	return uint64(time.Now().UnixNano())
 }
 
-// RunConsumer and RunBulkConsumer have been removed - Kafka is no longer used
-
 func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 	var result []BalanceChange
 
@@ -934,9 +932,6 @@ func isWithinRange(val decimal.Decimal) bool {
 	return true
 }
 
-// ProcessTransaction processes a transaction map and writes money flows directly to ClickHouse
-// Returns the number of money flow rows written and any error
-// This function can be called directly without Kafka
 func ProcessTransaction(tx map[string]interface{}) (int, error) {
 	var hash string
 	if h, ok := tx["hash"].(string); ok {
@@ -1232,15 +1227,6 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 	}
 
 	return rowsWritten, nil
-}
-
-func RunConsumers() {
-	consumerWgMutex.Lock()
-	consumerActive = true
-	consumerWgMutex.Unlock()
-
-	// Kafka consumers are no longer used - data is written directly to ClickHouse
-	// This function is kept for compatibility but does nothing
 }
 
 // WaitForConsumersToFinish waits for all consumer messages to be processed

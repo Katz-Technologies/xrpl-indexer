@@ -93,61 +93,6 @@ func EnvXrplWebsocketFullHistoryURL() string {
 }
 
 /*
-* Kafka settings
- */
-func EnvKafkaBootstrapServer() string {
-	return os.Getenv("KAFKA_BOOTSTRAP_SERVER")
-}
-
-func EnvKafkaGroupId() string {
-	return os.Getenv("KAFKA_GROUP_ID")
-}
-
-func EnvKafkaTopicNamespace() string {
-	return os.Getenv("KAFKA_TOPIC_NAMESPACE")
-}
-
-// Writer batching and delivery settings
-func EnvKafkaWriterBatchSize() int {
-	if v, err := strconv.Atoi(os.Getenv("KAFKA_WRITER_BATCH_SIZE")); err == nil && v > 0 {
-		return v
-	}
-	return 100 // default
-}
-
-func EnvKafkaWriterBatchBytes() int {
-	if v, err := strconv.Atoi(os.Getenv("KAFKA_WRITER_BATCH_BYTES")); err == nil && v > 0 {
-		return v
-	}
-	return 1024 * 1024 // 1 MiB default
-}
-
-func EnvKafkaWriterBatchTimeoutMs() int {
-	if v, err := strconv.Atoi(os.Getenv("KAFKA_WRITER_BATCH_TIMEOUT_MS")); err == nil && v >= 0 {
-		return v
-	}
-	return 50 // default 50ms
-}
-
-func EnvKafkaWriterCompression() string {
-	v := os.Getenv("KAFKA_WRITER_COMPRESSION")
-	if v == "" {
-		return "snappy" // lightweight default
-	}
-	return v
-}
-
-func EnvKafkaWriterRequiredAcks() int {
-	if v, err := strconv.Atoi(os.Getenv("KAFKA_WRITER_REQUIRED_ACKS")); err == nil {
-		// allow -1, 0, 1
-		if v == -1 || v == 0 || v == 1 {
-			return v
-		}
-	}
-	return 1 // leader-only default
-}
-
-/*
 * ClickHouse settings
  */
 func EnvClickHouseHost() string {

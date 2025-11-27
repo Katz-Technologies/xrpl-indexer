@@ -1,6 +1,6 @@
 # XRPL Indexer Platform
 
-Платформа для индексации и анализа транзакций XRP Ledger (XRPL) с использованием ClickHouse в качестве хранилища данных и Kafka для обработки сообщений.
+Платформа для индексации и анализа транзакций XRP Ledger (XRPL) с использованием ClickHouse в качестве хранилища данных.
 
 ## 📋 Содержание
 
@@ -62,7 +62,7 @@ XRPL Indexer Platform — это высокопроизводительная с
 │  (Go Service)   │
 └──────┬──────────┘
        │
-       ├──► Producers ──► Kafka ──► ClickHouse
+       ├──► Producers ──► ClickHouse
        │
        ├──► Socket.IO ──► WebSocket Clients
        │
@@ -72,26 +72,24 @@ XRPL Indexer Platform — это высокопроизводительная с
 ### Компоненты
 
 1. **Main Service** (`main.go`): Основной сервис, управляющий подключениями и обработкой
-2. **Producers**: Обработка леджеров и транзакций, запись в Kafka и ClickHouse
+2. **Producers**: Обработка леджеров и транзакций, запись в ClickHouse
 3. **ClickHouse**: Хранилище данных с материализованными представлениями
-4. **Kafka**: Очередь сообщений для асинхронной обработки
-5. **Socket.IO Hub**: Управление WebSocket соединениями
-6. **REST Controllers**: HTTP endpoints для API
-7. **Orchestrator**: Инструмент для параллельного бэкфиллинга
+4. **Socket.IO Hub**: Управление WebSocket соединениями
+5. **REST Controllers**: HTTP endpoints для API
+6. **Orchestrator**: Инструмент для параллельного бэкфиллинга
 
 ## 📦 Требования
 
 ### Системные требования
 
 - **Go**: версия 1.24.0 или выше
-- **Docker**: для запуска ClickHouse и Kafka
+- **Docker**: для запуска ClickHouse
 - **Docker Compose**: для оркестрации контейнеров
 - **Linux/Unix**: рекомендуется Linux для продакшена
 
 ### Внешние зависимости
 
 - **ClickHouse**: версия 24.8 или выше
-- **Kafka**: для обработки сообщений (опционально)
 - **XRPL Node**: WebSocket подключение к ноде XRPL
 
 ## 🚀 Установка
@@ -131,19 +129,47 @@ docker-compose up -d clickhouse
 
 ### 5. Сборка проекта
 
+#### Windows
+
+```bash
+go build -o .\bin\platform-server.exe .
+go build -o .\bin\platform-cli.exe .\cmd\cli
+go build -o .\bin\platform-orchestrator.exe .\cmd\orchestrator
+```
+
+#### Linux
+
+```bash
+go build -o ./bin/platform-server ./
+go build -o ./bin/platform-cli ./cmd/cli
+go build -o ./bin/platform-orchestrator ./cmd/orchestrator
+```
+
+Или используйте Makefile:
+
 ```bash
 make build
 ```
 
 Это создаст исполняемые файлы в директории `bin/`:
-- `bin/platform-server` - основной сервис
-- `bin/platform-cli` - CLI инструмент
-- `bin/platform-orchestrator` - оркестратор для бэкфиллинга
+- `bin/platform-server` / `bin/platform-server.exe` - основной сервис
+- `bin/platform-cli` / `bin/platform-cli.exe` - CLI инструмент
+- `bin/platform-orchestrator` / `bin/platform-orchestrator.exe` - оркестратор для бэкфиллинга
 
 ### 6. Запуск сервиса
 
+#### Windows
+
+```bash
+.\bin\platform-server.exe
+.\bin\platform-cli.exe
+```
+
+#### Linux
+
 ```bash
 ./bin/platform-server
+./bin/platform-cli
 ```
 
 Или используйте скрипт:
@@ -175,16 +201,6 @@ LOG_FILE_MAX_AGE_DAYS=7
 # XRPL
 XRPL_WEBSOCKET_URL=wss://s1.ripple.com/
 XRPL_WEBSOCKET_FULLHISTORY_URL=wss://xrplcluster.com/
-
-# Kafka
-KAFKA_BOOTSTRAP_SERVER=localhost:9092
-KAFKA_GROUP_ID=platform-group
-KAFKA_TOPIC_NAMESPACE=xrpl-platform
-KAFKA_WRITER_BATCH_SIZE=100
-KAFKA_WRITER_BATCH_BYTES=1048576
-KAFKA_WRITER_BATCH_TIMEOUT_MS=50
-KAFKA_WRITER_COMPRESSION=snappy
-KAFKA_WRITER_REQUIRED_ACKS=1
 
 # ClickHouse
 CLICKHOUSE_HOST=localhost
@@ -251,15 +267,30 @@ make build
 
 ### Запуск в фоне
 
-Используйте скрипт `run.sh` для запуска оркестратора в фоне:
+#### Linux
+
+Для запуска бэкфиллинга в фоне:
 
 ```bash
-./run.sh
+nohup ./run.sh > logs/backfill.log 2>&1 &
+```
+
+Для запуска оркестратора в фоне:
+
+```bash
+./bin/platform-orchestrator --workers 2 --from 98900000 --to 99119667 --servers "wss://s1.ripple.com/,wss://s2.ripple.com/" --check-interval 30s --verbose --redistribute-threshold 5000 > logs/orchestrator.log 2>&1 &
+```
+
+Для остановки оркестратора:
+
+```bash
+touch stop.orchestrator
 ```
 
 Логи будут записываться в:
 - `logs/orchestrator.log` - логи оркестратора
 - `logs/orchestrator-worker-*.log` - логи воркеров
+- `logs/backfill.log` - логи бэкфиллинга
 
 ## 🔌 API
 
@@ -331,9 +362,9 @@ xrpl-indexer/
 │   └── orchestrator/       # Оркестратор бэкфиллинга
 ├── config/                 # Конфигурация приложения
 │   ├── env.go              # Переменные окружения
-│   └── topics.go           # Kafka топики
+│   └── topics.go           # Конфигурация топиков
 ├── connections/            # Подключения к внешним сервисам
-├── consumers/              # Kafka consumers (устарело)
+├── consumers/              # Consumers (устарело)
 ├── controllers/            # HTTP контроллеры
 │   ├── AccountController.go
 │   └── TransactionController.go
@@ -379,10 +410,6 @@ xrpl-indexer/
 - Хранит историю цен XRP в USD
 - Партиционирование по месяцам
 
-#### Kafka интеграция
-
-- **`xrpl.ch_moneyflows_kafka`**: Kafka таблица для приема сообщений
-- **`xrpl.ch_mv_money_flows`**: Материализованное представление для автоматической обработки
 
 ### Запросы к базе данных
 
@@ -492,4 +519,3 @@ DETAILED_LOGGING_LEDGERS=98900000,98900001
 ---
 
 **Примечание**: Этот проект находится в активной разработке. API и схема базы данных могут изменяться между версиями.
-
