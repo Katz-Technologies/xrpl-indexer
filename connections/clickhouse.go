@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/xrpscan/platform/config"
 	"github.com/xrpscan/platform/logger"
+	"github.com/xrpscan/platform/socketio"
 )
 
 var ClickHouseConn driver.Conn
@@ -339,6 +340,10 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 		Interface("ledgers", ledgerSummary).
 		Msg("Successfully flushed batch to ClickHouse")
 
+	// Check for subscription activities after successful flush
+	// Run in goroutine to not block the flush operation
+	go checkAndEmitSubscriptionActivities(batch)
+
 	// Detailed logging for specific ledger indices
 	for ledgerIndex, rows := range ledgerRowsMap {
 		if config.ShouldLogDetailed(ledgerIndex) {
@@ -611,4 +616,213 @@ func RecordEmptyLedger(ledgerIndex uint32, closeTimeUnix int64, totalTransaction
 	}
 
 	return nil
+}
+
+// checkAndEmitSubscriptionActivities checks for activities on subscribed addresses
+// and emits SocketIO events to subscribers
+func checkAndEmitSubscriptionActivities(batch []MoneyFlowRow) {
+	if ClickHouseConn == nil {
+		logger.Log.Warn().Msg("checkAndEmitSubscriptionActivities: ClickHouse connection not initialized")
+		return
+	}
+
+	// Filter batch for swap or dexOffer activities (as per original requirement)
+	// But also log all kinds for debugging
+	relevantRows := make([]MoneyFlowRow, 0)
+	kindCounts := make(map[string]int)
+	for _, row := range batch {
+		kindCounts[row.Kind]++
+		if row.Kind == "swap" || row.Kind == "dexOffer" {
+			relevantRows = append(relevantRows, row)
+		}
+	}
+
+	// Collect unique addresses (both from and to)
+	addressSet := make(map[string]bool)
+	for _, row := range relevantRows {
+		if row.FromAddress != "" {
+			addressSet[row.FromAddress] = true
+		}
+		if row.ToAddress != "" {
+			addressSet[row.ToAddress] = true
+		}
+	}
+
+	// Build list of addresses for SQL IN clause
+	addresses := make([]string, 0, len(addressSet))
+	for addr := range addressSet {
+		addresses = append(addresses, addr)
+	}
+
+	// Query subscription_links to find subscribers
+	// We need to find all subscription_links where to_address is in our list
+	queryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// For ClickHouse, build query with multiple ? placeholders for IN clause
+	if len(addresses) == 0 {
+		return
+	}
+
+	// Build query with placeholders for addresses
+	placeholders := make([]string, len(addresses))
+	args := make([]interface{}, len(addresses))
+	for i, addr := range addresses {
+		placeholders[i] = "?"
+		args[i] = addr
+	}
+
+	// Note: subscription_links uses MergeTree, not ReplacingMergeTree, so FINAL is not needed
+	query := fmt.Sprintf(`
+		SELECT DISTINCT from_address, to_address
+		FROM xrpl.subscription_links
+		WHERE to_address IN (%s)
+	`, strings.Join(placeholders, ","))
+
+	logger.Log.Debug().
+		Str("query", query).
+		Int("address_count", len(addresses)).
+		Msg("checkAndEmitSubscriptionActivities: executing subscription query")
+
+	rows, err := ClickHouseConn.Query(queryCtx, query, args...)
+	if err != nil {
+		logger.Log.Error().
+			Err(err).
+			Str("query", query).
+			Msg("checkAndEmitSubscriptionActivities: failed to query subscription_links")
+		return
+	}
+	defer rows.Close()
+
+	// Build map: subscribed_address -> list of subscriber_addresses
+	subscriptionMap := make(map[string][]string)
+	subscriptionCount := 0
+	for rows.Next() {
+		var subscriberAddr, subscribedAddr string
+		if err := rows.Scan(&subscriberAddr, &subscribedAddr); err != nil {
+			logger.Log.Error().Err(err).Msg("checkAndEmitSubscriptionActivities: failed to scan subscription row")
+			continue
+		}
+		subscriptionMap[subscribedAddr] = append(subscriptionMap[subscribedAddr], subscriberAddr)
+		subscriptionCount++
+	}
+
+	logger.Log.Debug().
+		Int("subscriptions_found", subscriptionCount).
+		Int("unique_subscribed_addresses", len(subscriptionMap)).
+		Msg("checkAndEmitSubscriptionActivities: subscription query results")
+
+	if len(subscriptionMap) == 0 {
+		logger.Log.Debug().
+			Strs("checked_addresses", addresses[:min(10, len(addresses))]).
+			Msg("checkAndEmitSubscriptionActivities: no subscriptions found for any addresses")
+		return
+	}
+
+	// Group transactions by address and collect subscribers
+	// Map: tx_hash -> subscribers list
+	transactionSubscribers := make(map[string][]string)
+	transactionData := make(map[string]MoneyFlowRow)
+
+	for _, row := range relevantRows {
+		// Check both from_address and to_address
+		addressesToCheck := []string{}
+		if row.FromAddress != "" {
+			addressesToCheck = append(addressesToCheck, row.FromAddress)
+		}
+		if row.ToAddress != "" && row.ToAddress != row.FromAddress {
+			addressesToCheck = append(addressesToCheck, row.ToAddress)
+		}
+
+		// Collect all subscribers for this transaction
+		allSubscribers := make(map[string]bool)
+		for _, addr := range addressesToCheck {
+			subscribers, exists := subscriptionMap[addr]
+			if exists {
+				for _, subscriber := range subscribers {
+					allSubscribers[subscriber] = true
+				}
+			}
+		}
+
+		// If there are subscribers, add this transaction
+		if len(allSubscribers) > 0 {
+			subscribersList := make([]string, 0, len(allSubscribers))
+			for subscriber := range allSubscribers {
+				subscribersList = append(subscribersList, subscriber)
+			}
+			transactionSubscribers[row.TxHash] = subscribersList
+			transactionData[row.TxHash] = row
+		}
+	}
+
+	// If no transactions with subscribers, return early
+	if len(transactionSubscribers) == 0 {
+		logger.Log.Debug().
+			Int("relevant_rows", len(relevantRows)).
+			Int("subscribed_addresses", len(subscriptionMap)).
+			Msg("checkAndEmitSubscriptionActivities: no events emitted (no matching subscriptions)")
+		return
+	}
+
+	// Build activities array
+	activities := make([]socketio.SubscriptionActivityItem, 0, len(transactionSubscribers))
+	for txHash, subscribers := range transactionSubscribers {
+		row := transactionData[txHash]
+		activities = append(activities, socketio.SubscriptionActivityItem{
+			Subscribers: subscribers,
+			MoneyFlow: socketio.MoneyFlowData{
+				TxHash:       row.TxHash,
+				LedgerIndex:  row.LedgerIndex,
+				Kind:         row.Kind,
+				FromAddress:  row.FromAddress,
+				ToAddress:    row.ToAddress,
+				FromCurrency: row.FromCurrency,
+				FromIssuer:   row.FromIssuerAddress,
+				ToCurrency:   row.ToCurrency,
+				ToIssuer:     row.ToIssuerAddress,
+				FromAmount:   row.FromAmount,
+				ToAmount:     row.ToAmount,
+				Timestamp:    row.CloseTimeUnix,
+			},
+		})
+	}
+
+	// Emit single event with all activities
+	hub := socketio.GetHub()
+	event := socketio.SubscriptionActivityEvent{
+		Activities: activities,
+	}
+
+	logger.Log.Debug().
+		Int("transactions_count", len(activities)).
+		Int("total_subscribers", countTotalSubscribers(transactionSubscribers)).
+		Msg("checkAndEmitSubscriptionActivities: emitting batch event")
+
+	hub.EmitSubscriptionActivity(event)
+
+	logger.Log.Info().
+		Int("transactions_count", len(activities)).
+		Int("total_subscribers", countTotalSubscribers(transactionSubscribers)).
+		Int("relevant_rows", len(relevantRows)).
+		Msg("Emitted subscription activity batch event")
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// countTotalSubscribers counts total unique subscribers across all transactions
+func countTotalSubscribers(transactionSubscribers map[string][]string) int {
+	uniqueSubscribers := make(map[string]bool)
+	for _, subscribers := range transactionSubscribers {
+		for _, subscriber := range subscribers {
+			uniqueSubscribers[subscriber] = true
+		}
+	}
+	return len(uniqueSubscribers)
 }

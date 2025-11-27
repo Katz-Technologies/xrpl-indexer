@@ -12,6 +12,10 @@ func Add(e *echo.Echo) {
 	e.GET("/tx/:hash", controllers.GetTransaction)
 	e.GET("/account/:address", controllers.GetAccountInfo)
 
+	// Subscription links
+	e.POST("/subscription-links", controllers.CreateSubscriptionLink)
+	e.DELETE("/subscription-links", controllers.DeleteSubscriptionLink)
+
 	hub := socketio.GetHub()
 
 	e.Any("/socket.io/", echo.WrapHandler(http.HandlerFunc(hub.HandleSocketIO)))
