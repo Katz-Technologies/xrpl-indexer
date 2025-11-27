@@ -12,8 +12,9 @@ import (
 
 // TokenInfo represents a token (currency + issuer)
 type TokenInfo struct {
-	Currency string
-	Issuer   string
+	Currency      string
+	Issuer        string
+	InLedgerIndex uint32 // Index of the transaction within the ledger where this token was found
 }
 
 // IsTokenKnown checks if a token exists in the known_tokens table or in money_flow
@@ -212,11 +213,26 @@ func AddKnownToken(ctx context.Context, currency, issuer string, ledgerIndex uin
 		return fmt.Errorf("failed to insert known token: %w", err)
 	}
 
-	logger.Log.Debug().
-		Str("currency", currency).
-		Str("issuer", issuer).
-		Uint32("ledger_index", ledgerIndex).
-		Msg("Added token to known_tokens table")
+	return nil
+}
+
+// AddNewToken adds a new token to the new_tokens table
+func AddNewToken(ctx context.Context, currency, issuer string, ledgerIndex uint32, inLedgerIndex uint32) error {
+	if ClickHouseConn == nil {
+		return fmt.Errorf("ClickHouse connection not initialized")
+	}
+
+	query := fmt.Sprintf(`
+		INSERT INTO xrpl.new_tokens 
+		(currency_code, issuer, first_seen_ledger_index, first_seen_in_ledger_index)
+		VALUES ('%s', '%s', %d, %d)
+	`, currency, issuer, ledgerIndex, inLedgerIndex)
+
+	err := ClickHouseConn.Exec(ctx, query)
+
+	if err != nil {
+		return fmt.Errorf("failed to insert new token: %w", err)
+	}
 
 	return nil
 }

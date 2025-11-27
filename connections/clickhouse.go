@@ -679,11 +679,6 @@ func checkAndEmitSubscriptionActivities(batch []MoneyFlowRow) {
 		WHERE to_address IN (%s)
 	`, strings.Join(placeholders, ","))
 
-	logger.Log.Debug().
-		Str("query", query).
-		Int("address_count", len(addresses)).
-		Msg("checkAndEmitSubscriptionActivities: executing subscription query")
-
 	rows, err := ClickHouseConn.Query(queryCtx, query, args...)
 	if err != nil {
 		logger.Log.Error().
@@ -705,18 +700,6 @@ func checkAndEmitSubscriptionActivities(batch []MoneyFlowRow) {
 		}
 		subscriptionMap[subscribedAddr] = append(subscriptionMap[subscribedAddr], subscriberAddr)
 		subscriptionCount++
-	}
-
-	logger.Log.Debug().
-		Int("subscriptions_found", subscriptionCount).
-		Int("unique_subscribed_addresses", len(subscriptionMap)).
-		Msg("checkAndEmitSubscriptionActivities: subscription query results")
-
-	if len(subscriptionMap) == 0 {
-		logger.Log.Debug().
-			Strs("checked_addresses", addresses[:min(10, len(addresses))]).
-			Msg("checkAndEmitSubscriptionActivities: no subscriptions found for any addresses")
-		return
 	}
 
 	// Group transactions by address and collect subscribers
@@ -794,35 +777,5 @@ func checkAndEmitSubscriptionActivities(batch []MoneyFlowRow) {
 		Activities: activities,
 	}
 
-	logger.Log.Debug().
-		Int("transactions_count", len(activities)).
-		Int("total_subscribers", countTotalSubscribers(transactionSubscribers)).
-		Msg("checkAndEmitSubscriptionActivities: emitting batch event")
-
 	hub.EmitSubscriptionActivity(event)
-
-	logger.Log.Info().
-		Int("transactions_count", len(activities)).
-		Int("total_subscribers", countTotalSubscribers(transactionSubscribers)).
-		Int("relevant_rows", len(relevantRows)).
-		Msg("Emitted subscription activity batch event")
-}
-
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// countTotalSubscribers counts total unique subscribers across all transactions
-func countTotalSubscribers(transactionSubscribers map[string][]string) int {
-	uniqueSubscribers := make(map[string]bool)
-	for _, subscribers := range transactionSubscribers {
-		for _, subscriber := range subscribers {
-			uniqueSubscribers[subscriber] = true
-		}
-	}
-	return len(uniqueSubscribers)
 }

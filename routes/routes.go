@@ -9,12 +9,11 @@ import (
 )
 
 func Add(e *echo.Echo) {
-	e.GET("/tx/:hash", controllers.GetTransaction)
-	e.GET("/account/:address", controllers.GetAccountInfo)
-
 	// Subscription links
 	e.POST("/subscription-links", controllers.CreateSubscriptionLink)
 	e.DELETE("/subscription-links", controllers.DeleteSubscriptionLink)
+
+	e.GET("/new-tokens", controllers.GetNewTokens)
 
 	hub := socketio.GetHub()
 

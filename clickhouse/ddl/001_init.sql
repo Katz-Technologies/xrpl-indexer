@@ -132,3 +132,19 @@ SETTINGS
 -- You can safely ignore "index with this name already exists" errors or run these manually once.
 ALTER TABLE xrpl.subscription_links ADD INDEX IF NOT EXISTS idx_subscriber (from_address) TYPE set(0) GRANULARITY 64;
 ALTER TABLE xrpl.subscription_links ADD INDEX IF NOT EXISTS idx_subscribed_to (to_address) TYPE set(0) GRANULARITY 64;
+
+CREATE TABLE IF NOT EXISTS xrpl.new_tokens
+(
+  currency_code String,
+  issuer String,
+  first_seen_ledger_index UInt32,
+  first_seen_in_ledger_index UInt32,
+)
+ENGINE = MergeTree()
+ORDER BY (first_seen_ledger_index, first_seen_in_ledger_index)
+SETTINGS
+  index_granularity = 8192,
+  index_granularity_bytes = 10485760;
+
+ALTER TABLE xrpl.new_tokens ADD INDEX IF NOT EXISTS idx_first_seen_ledger_index (first_seen_ledger_index) TYPE minmax GRANULARITY 4;
+ALTER TABLE xrpl.new_tokens ADD INDEX IF NOT EXISTS idx_first_seen_in_ledger_index (first_seen_in_ledger_index) TYPE minmax GRANULARITY 4;

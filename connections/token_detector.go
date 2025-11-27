@@ -68,7 +68,7 @@ func DeepCopyTransactions(transactions []interface{}) []interface{} {
 
 // ExtractTokensFromTransaction extracts all unique tokens (currency, issuer) from a transaction
 // Note: The transaction map should already be copied before calling this function if it will be used concurrently
-func ExtractTokensFromTransaction(tx map[string]interface{}) []TokenInfo {
+func ExtractTokensFromTransaction(tx map[string]interface{}, inLedgerIndex uint32) []TokenInfo {
 	tokens := make(map[string]TokenInfo)
 
 	// Helper function to add token
@@ -80,7 +80,7 @@ func ExtractTokensFromTransaction(tx map[string]interface{}) []TokenInfo {
 			return
 		}
 		key := currency + "|" + issuer
-		tokens[key] = TokenInfo{Currency: currency, Issuer: issuer}
+		tokens[key] = TokenInfo{Currency: currency, Issuer: issuer, InLedgerIndex: inLedgerIndex}
 	}
 
 	// Extract from Amount field
@@ -185,7 +185,7 @@ func CheckAndNotifyNewTokens(ctx context.Context, transactions []interface{}, le
 	// Collect all unique tokens from all transactions
 	allTokens := make(map[string]TokenInfo)
 
-	for _, txObj := range transactions {
+	for idx, txObj := range transactions {
 		tx, ok := txObj.(map[string]interface{})
 		if !ok {
 			continue
@@ -198,10 +198,56 @@ func CheckAndNotifyNewTokens(ctx context.Context, transactions []interface{}, le
 			}
 		}
 
-		tokens := ExtractTokensFromTransaction(tx)
+		// Extract inLedgerIndex from transaction meta, fallback to array index
+		var inLedgerIndex uint32 = uint32(idx) // Default to array index
+		foundInMeta := false
+
+		// First, try to get from meta.TransactionIndex
+		if meta, ok := tx["meta"].(map[string]interface{}); ok {
+			// Try TransactionIndex (float64) - most common format
+			if ti, ok := meta["TransactionIndex"].(float64); ok {
+				inLedgerIndex = uint32(ti)
+				foundInMeta = true
+			} else if ti, ok := meta["TransactionIndex"].(int); ok {
+				// Try TransactionIndex (int)
+				inLedgerIndex = uint32(ti)
+				foundInMeta = true
+			} else if ti, ok := meta["TransactionIndex"].(uint32); ok {
+				// Try TransactionIndex (uint32)
+				inLedgerIndex = ti
+				foundInMeta = true
+			} else if ti, ok := meta["TransactionIndex"].(int64); ok {
+				// Try TransactionIndex (int64)
+				inLedgerIndex = uint32(ti)
+				foundInMeta = true
+			}
+		}
+
+		// If not found in meta, try root level fields (inLedger or TransactionIndex)
+		if !foundInMeta {
+			if inLedger, ok := tx["inLedger"].(float64); ok {
+				inLedgerIndex = uint32(inLedger)
+			} else if inLedger, ok := tx["inLedger"].(uint32); ok {
+				inLedgerIndex = inLedger
+			} else if inLedger, ok := tx["inLedger"].(int); ok {
+				inLedgerIndex = uint32(inLedger)
+			} else if ti, ok := tx["TransactionIndex"].(float64); ok {
+				inLedgerIndex = uint32(ti)
+			} else if ti, ok := tx["TransactionIndex"].(uint32); ok {
+				inLedgerIndex = ti
+			} else if ti, ok := tx["TransactionIndex"].(int); ok {
+				inLedgerIndex = uint32(ti)
+			}
+			// If still not found, inLedgerIndex remains as array index (idx)
+		}
+
+		tokens := ExtractTokensFromTransaction(tx, inLedgerIndex)
 		for _, token := range tokens {
 			key := token.Currency + "|" + token.Issuer
-			allTokens[key] = token
+			// Keep the token with the minimum InLedgerIndex (first occurrence in ledger)
+			if existing, exists := allTokens[key]; !exists || token.InLedgerIndex < existing.InLedgerIndex {
+				allTokens[key] = token
+			}
 		}
 	}
 
@@ -260,6 +306,7 @@ func CheckAndNotifyNewTokens(ctx context.Context, transactions []interface{}, le
 			// New token found!
 			newTokens = append(newTokens, token)
 		} else {
+			newTokens = append(newTokens, token) //Тут
 			// Token has history but not in our DB, add it to known_tokens
 			tokensToAddToKnown = append(tokensToAddToKnown, token)
 		}
@@ -280,6 +327,16 @@ func CheckAndNotifyNewTokens(ctx context.Context, transactions []interface{}, le
 	// Add new tokens to known_tokens and notify
 	for _, token := range newTokens {
 		err := AddKnownToken(ctx, token.Currency, token.Issuer, ledgerIndex, ledgerTimestamp)
+		if err != nil {
+			logger.Log.Error().
+				Err(err).
+				Str("currency", token.Currency).
+				Str("issuer", token.Issuer).
+				Msg("Failed to add new token to database")
+			continue
+		}
+
+		err = AddNewToken(ctx, token.Currency, token.Issuer, ledgerIndex, token.InLedgerIndex)
 		if err != nil {
 			logger.Log.Error().
 				Err(err).
