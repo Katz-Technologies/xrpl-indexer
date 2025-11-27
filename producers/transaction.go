@@ -136,6 +136,6 @@ func ProcessTransactionsDirectly(message []byte, isRealtime bool) {
 		if err != nil {
 			logger.Log.Error().Err(err).Str("tx_hash", hash).Uint32("ledger_index", ledger.LedgerIndex).Msg("Failed to process transaction")
 			// Continue processing other transactions even if one fails
-		} 
+		}
 	}
 }
