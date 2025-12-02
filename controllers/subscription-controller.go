@@ -11,15 +11,11 @@ import (
 	"github.com/xrpscan/platform/logger"
 )
 
-// SubscriptionLinkRequest структура для запроса создания/удаления подписки
 type SubscriptionLinkRequest struct {
 	FromAddress string `json:"from_address" validate:"required"`
 	ToAddress   string `json:"to_address" validate:"required"`
 }
 
-// CreateSubscriptionLink создает связку подписки
-// POST /subscription-links
-// Body: {"from_address": "rXXX...", "to_address": "rYYY..."}
 func CreateSubscriptionLink(c echo.Context) error {
 	var req SubscriptionLinkRequest
 	if err := c.Bind(&req); err != nil {
@@ -80,9 +76,6 @@ func CreateSubscriptionLink(c echo.Context) error {
 	})
 }
 
-// DeleteSubscriptionLink удаляет связку подписки
-// DELETE /subscription-links
-// Body: {"from_address": "rXXX...", "to_address": "rYYY..."}
 func DeleteSubscriptionLink(c echo.Context) error {
 	var req SubscriptionLinkRequest
 	if err := c.Bind(&req); err != nil {

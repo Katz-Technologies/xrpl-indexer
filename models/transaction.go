@@ -318,28 +318,24 @@ type Transaction struct {
 }
 
 // Row payloads for ClickHouse ingestion
-// Убрано CHTransactionRow - таблицы transactions больше нет
-
 type CHAccountRow struct {
 	AccountID string `json:"account_id"`
 	Address   string `json:"address"`
 	Version   uint64 `json:"version"`
 }
 
-// Убрано CHAssetRow - таблицы assets больше нет
-
 type CHMoneyFlowRow struct {
-	TxHash            string `json:"tx_hash"`             // PRIMARY KEY вместо tx_id UUID
-	LedgerIndex       uint32 `json:"ledger_index"`        // из transactions
-	InLedgerIndex     uint32 `json:"in_ledger_index"`     // из transactions
-	CloseTimeUnix     int64  `json:"close_time_unix"`     // из transactions
-	FeeDrops          uint64 `json:"fee_drops"`           // из transactions
-	FromAddress       string `json:"from_address"`        // адрес отправителя
-	ToAddress         string `json:"to_address"`          // адрес получателя
-	FromCurrency      string `json:"from_currency"`       // валюта отправителя
-	FromIssuerAddress string `json:"from_issuer_address"` // эмитент валюты отправителя
-	ToCurrency        string `json:"to_currency"`         // валюта получателя
-	ToIssuerAddress   string `json:"to_issuer_address"`   // эмитент валюты получателя
+	TxHash            string `json:"tx_hash"`
+	LedgerIndex       uint32 `json:"ledger_index"`
+	InLedgerIndex     uint32 `json:"in_ledger_index"`
+	CloseTimeUnix     int64  `json:"close_time_unix"`
+	FeeDrops          uint64 `json:"fee_drops"`
+	FromAddress       string `json:"from_address"`
+	ToAddress         string `json:"to_address"`
+	FromCurrency      string `json:"from_currency"`
+	FromIssuerAddress string `json:"from_issuer_address"`
+	ToCurrency        string `json:"to_currency"`
+	ToIssuerAddress   string `json:"to_issuer_address"`
 	FromAmount        string `json:"from_amount"`
 	ToAmount          string `json:"to_amount"`
 	InitFromAmount    string `json:"init_from_amount"`

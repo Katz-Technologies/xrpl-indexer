@@ -48,19 +48,17 @@ type BalanceChange struct {
 }
 
 var (
-	eps           = decimal.NewFromFloat(1e-100) // очень маленький порог для работы с числами до 100 знаков после запятой
-	dustThreshold = decimal.NewFromFloat(1e-100) // всё меньше — считаем нулём (очень маленький порог)
+	eps           = decimal.NewFromFloat(1e-100)
+	dustThreshold = decimal.NewFromFloat(1e-100)
 )
 
 func normalizeAmount(val decimal.Decimal) decimal.Decimal {
 	abs := val.Abs()
 
-	// Убираем только очень маленькую "пыль", но не ограничиваем большие числа
 	if abs.LessThan(dustThreshold) {
 		return decimal.Zero
 	}
 
-	// Не ограничиваем большие числа - они будут отфильтрованы позже при построении связок
 	return val
 }
 
@@ -128,7 +126,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 	txAccount, _ := base["Account"].(string)
 	txDestination, _ := base["Destination"].(string)
 
-	// Парсим Fee, который может быть разных типов
 	txFee := decimal.Zero
 	switch v := base["Fee"].(type) {
 	case string:
@@ -145,7 +142,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 		}
 	}
 
-	// 🔹 1) Собираем все аккаунты с AMMID (исключаем их из балансов)
 	ammAccounts := map[string]bool{}
 	for _, raw := range nodes {
 		nodeMap, ok := raw.(map[string]interface{})
@@ -175,7 +171,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 		}
 	}
 
-	// 🔹 2) Проверяем наличие Offer (DEX)
 	hasOffer := false
 	for _, raw := range nodes {
 		nodeMap, ok := raw.(map[string]interface{})
@@ -194,17 +189,14 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 		}
 	}
 
-	// 🔹 3) Проверяем self-swap
 	isSelfSwap := txAccount != "" && txAccount == txDestination && !hasOffer
 
-	// 🔹 4) Собираем изменения
 	for _, raw := range nodes {
 		nodeMap, ok := raw.(map[string]interface{})
 		if !ok {
 			continue
 		}
 
-		// Обработка ModifiedNode и DeletedNode
 		for _, nodeType := range []string{"ModifiedNode", "DeletedNode"} {
 			node, ok := nodeMap[nodeType].(map[string]interface{})
 			if !ok {
@@ -242,12 +234,10 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 
 				kind := KindUnknown
 
-				// Определяем Fee по точному совпадению с суммой комиссии
 				if account == txAccount && delta.IsNegative() && delta.Abs().Equal(txFee.Div(decimal.NewFromInt(1_000_000)).Abs()) {
 					kind = KindFee
 				}
 
-				// Начальный баланс в XRP (до изменения)
 				initBalance := balPrev.Div(decimal.NewFromInt(1_000_000))
 
 				result = append(result, BalanceChange{
@@ -276,34 +266,25 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				lowIssuer, _ := lowLimit["issuer"].(string)
 				currency, _ := highLimit["currency"].(string)
 
-				// Определяем реального issuer токена из этой конкретной RippleState: тот, у кого value = 0
-				// Если оба = 0, то смотрим на знак баланса
 				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, balPrev, balFinal)
 
-				// Если не смогли определить через RippleState, пробуем через поля транзакции
 				if realIssuer == "" {
 					realIssuer = detectTokenIssuer(base, currency)
 				}
 
-				// Определяем burn операцию: если токены отправляются эмитенту
 				isBurn := false
 				if txDestination != "" && txDestination == realIssuer && delta.IsPositive() {
 					isBurn = true
 				}
 
-				// Определяем выдачу: если эмитент отправляет токен пользователю
 				isPayout := false
 				if txAccount == realIssuer && txDestination != realIssuer {
-					// Для High: delta отрицательное = получатель получает токены (balance уменьшается в отрицательную сторону)
-					// Для Low: delta положительное = получатель получает токены (balance увеличивается)
 					if (highIssuer == txDestination && delta.IsNegative()) ||
 						(lowIssuer == txDestination && delta.IsPositive()) {
 						isPayout = true
 					}
 				}
 
-				// сторона High (баланс ведётся от лица HighIssuer)
-				// Не показываем изменения самого эмитента (у которого value = 0)
 				if highIssuer != "" && highIssuer != realIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
 					kind := KindUnknown
 					if isBurn && highIssuer == txAccount {
@@ -312,7 +293,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					if isPayout && highIssuer == txDestination {
 						kind = KindPayout
 					}
-					// Начальный баланс для HighSide: -balPrev (баланс инвертирован)
 					initBalanceHigh := balPrev.Neg()
 					result = append(result, BalanceChange{
 						Account:     highIssuer,
@@ -323,8 +303,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 						Kind:        kind,
 					})
 				}
-				// сторона Low
-				// Не показываем изменения самого эмитента (у которого value = 0)
 				if lowIssuer != "" && lowIssuer != realIssuer && !ammAccounts[lowIssuer] && !(isSelfSwap && lowIssuer != txAccount) {
 					kind := KindUnknown
 					if isBurn && lowIssuer == txAccount {
@@ -333,7 +311,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					if isPayout && lowIssuer == txDestination {
 						kind = KindPayout
 					}
-					// Начальный баланс для LowSide: balPrev
 					initBalanceLow := balPrev
 					result = append(result, BalanceChange{
 						Account:     lowIssuer,
@@ -347,7 +324,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 			}
 		}
 
-		// Обработка CreatedNode (создание новых аккаунтов или trustlines)
 		if node, ok := nodeMap["CreatedNode"].(map[string]interface{}); ok {
 			ledgerType, _ := node["LedgerEntryType"].(string)
 			newFields, _ := node["NewFields"].(map[string]interface{})
@@ -375,8 +351,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 					continue
 				}
 
-				// Новый аккаунт получает баланс (всегда положительный)
-				// Начальный баланс = 0 (это новый аккаунт)
 				result = append(result, BalanceChange{
 					Account:     account,
 					Currency:    "XRP",
@@ -387,7 +361,6 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				})
 
 			case "RippleState":
-				// Создание trustline с начальным балансом
 				balNew, ok1 := extractDecimal(newFields, "Balance", "value")
 				if !ok1 || balNew.IsZero() {
 					continue
@@ -399,19 +372,13 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 				lowIssuer, _ := lowLimit["issuer"].(string)
 				currency, _ := highLimit["currency"].(string)
 
-				// Определяем реального issuer токена из этой конкретной RippleState: тот, у кого value = 0
-				// Если оба = 0, то смотрим на знак баланса
 				realIssuer := determineRealIssuerWithBalance(highLimit, lowLimit, highIssuer, lowIssuer, decimal.Zero, balNew)
 
-				// Если не смогли определить через RippleState, пробуем через поля транзакции
 				if realIssuer == "" {
 					realIssuer = detectTokenIssuer(base, currency)
 				}
 
-				// сторона High
-				// Не показываем изменения самого эмитента (у которого value = 0)
 				if highIssuer != "" && highIssuer != realIssuer && !ammAccounts[highIssuer] && !(isSelfSwap && highIssuer != txAccount) {
-					// Для новой trustline начальный баланс = 0
 					result = append(result, BalanceChange{
 						Account:     highIssuer,
 						Currency:    currency,
@@ -421,10 +388,7 @@ func ExtractBalanceChanges(base map[string]interface{}) []BalanceChange {
 						Kind:        KindUnknown,
 					})
 				}
-				// сторона Low
-				// Не показываем изменения самого эмитента (у которого value = 0)
 				if lowIssuer != "" && lowIssuer != realIssuer && !ammAccounts[lowIssuer] && !(isSelfSwap && lowIssuer != txAccount) {
-					// Для новой trustline начальный баланс = 0
 					result = append(result, BalanceChange{
 						Account:     lowIssuer,
 						Currency:    currency,
@@ -534,7 +498,6 @@ func getDeliveredInfo(tx map[string]interface{}) (currency, issuer string, value
 		if cur, iss, v, okk := tryObj(meta["DeliveredAmount"]); okk {
 			return cur, iss, v, true, true
 		}
-		// XRP case: может быть строкой-дропами
 		if s, oks := meta["delivered_amount"].(string); oks && s != "" {
 			if drops, err := decimal.NewFromString(s); err == nil {
 				return "XRP", "XRP", drops.Div(decimal.NewFromInt(1_000_000)), false, true
@@ -547,9 +510,8 @@ func getDeliveredInfo(tx map[string]interface{}) (currency, issuer string, value
 		}
 	}
 
-	// fallback к Amount (если нет delivered_amount)
 	switch a := tx["Amount"].(type) {
-	case string: // XRP drops
+	case string:
 		if a != "" {
 			if drops, err := decimal.NewFromString(a); err == nil {
 				return "XRP", "XRP", drops.Div(decimal.NewFromInt(1_000_000)), false, true
@@ -604,7 +566,6 @@ func pairAccountActions(
 		}
 	}
 
-	// Жадно парим самый большой по модулю с самым большим по модулю
 	sort.Slice(pos, func(i, j int) bool {
 		return changes[pos[i]].Delta.GreaterThan(changes[pos[j]].Delta)
 	})
@@ -619,7 +580,6 @@ func pairAccountActions(
 	for k := 0; k < n; k++ {
 		ip := pos[k]
 		in := neg[k]
-		// Проверяем, что обе дельты в допустимом диапазоне
 		if isWithinRange(changes[ip].Delta) && isWithinRange(changes[in].Delta) {
 			acts = append(acts, Action{
 				Kind: actionKind,
@@ -628,20 +588,19 @@ func pairAccountActions(
 						Account:     account,
 						Currency:    changes[in].Currency,
 						Issuer:      changes[in].Issuer,
-						Amount:      changes[in].Delta, // минус
+						Amount:      changes[in].Delta,
 						InitBalance: changes[in].InitBalance,
 					},
 					{
 						Account:     account,
 						Currency:    changes[ip].Currency,
 						Issuer:      changes[ip].Issuer,
-						Amount:      changes[ip].Delta, // плюс
+						Amount:      changes[ip].Delta,
 						InitBalance: changes[ip].InitBalance,
 					},
 				},
 				Note: fmt.Sprintf("%s pair for %s", actionKind, account),
 			})
-			// проставим Kind у изменений
 			switch actionKind {
 			case ActSwap:
 				changes[ip].Kind = KindSwap
@@ -650,12 +609,9 @@ func pairAccountActions(
 				changes[ip].Kind = KindDexOffer
 				changes[in].Kind = KindDexOffer
 			}
-			// Помечаем как использованные только если связка прошла проверку диапазона
 			used[ip] = true
 			used[in] = true
 		}
-		// Если связка не прошла проверку диапазона, не помечаем как used,
-		// чтобы эти изменения могли быть обработаны как Loss в конце
 	}
 
 	return
@@ -668,10 +624,8 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 	txAccount, _ := tx["Account"].(string)
 	txDestination, _ := tx["Destination"].(string)
 
-	// 1) Fee (явное)
 	for i := range changes {
 		if changes[i].Kind == KindFee && !used[i] {
-			// Проверяем, что дельта в допустимом диапазоне
 			if isWithinRange(changes[i].Delta) {
 				actions = append(actions, Action{
 					Kind: ActFee,
@@ -679,7 +633,7 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 						Account:     changes[i].Account,
 						Currency:    "XRP",
 						Issuer:      "XRP",
-						Amount:      changes[i].Delta, // отрицательное
+						Amount:      changes[i].Delta,
 						InitBalance: changes[i].InitBalance,
 					}},
 					Note: "Fee",
@@ -689,10 +643,8 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		}
 	}
 
-	// 2) Burn (явное)
 	for i := range changes {
 		if changes[i].Kind == KindBurn && !used[i] {
-			// Проверяем, что дельта в допустимом диапазоне
 			if isWithinRange(changes[i].Delta) {
 				actions = append(actions, Action{
 					Kind: ActBurn,
@@ -700,7 +652,7 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 						Account:     changes[i].Account,
 						Currency:    changes[i].Currency,
 						Issuer:      changes[i].Issuer,
-						Amount:      changes[i].Delta, // отрицательное (токены сжигаются)
+						Amount:      changes[i].Delta,
 						InitBalance: changes[i].InitBalance,
 					}},
 					Note: "Burn",
@@ -710,10 +662,8 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		}
 	}
 
-	// 3) Payout (явное)
 	for i := range changes {
 		if changes[i].Kind == KindPayout && !used[i] {
-			// Проверяем, что дельта в допустимом диапазоне
 			if isWithinRange(changes[i].Delta) {
 				actions = append(actions, Action{
 					Kind: ActPayout,
@@ -731,10 +681,8 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		}
 	}
 
-	// 4) Loss (явное)
 	for i := range changes {
 		if changes[i].Kind == KindLoss && !used[i] {
-			// Проверяем, что дельта в допустимом диапазоне
 			if isWithinRange(changes[i].Delta) {
 				actions = append(actions, Action{
 					Kind: ActLoss,
@@ -752,13 +700,11 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		}
 	}
 
-	// 5) Свап у отправителя (если есть -XRP и +IOU/XRP)
 	if txAccount != "" {
 		acts := pairAccountActions(txAccount, changes, used, ActSwap)
 		actions = append(actions, acts...)
 	}
 
-	// 6) DexOffer у остальных (каждый аккаунт, кроме отправителя и получателя)
 	byAcct := collectByAccount(changes, used)
 	for acct := range byAcct {
 		if acct == txAccount || acct == txDestination {
@@ -768,12 +714,10 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 		actions = append(actions, acts...)
 	}
 
-	// 7) Transfer: связать txAccount(оставшийся минус) -> txDestination(плюс delivered)
 	delCur, delIss, delVal, _, hasDel := getDeliveredInfo(tx)
 
 	var destPosIdx = -1
 	if hasDel && txDestination != "" {
-		// ищем у destination положительный change по delivered (лучший матч по валюте/эмитенту/величине)
 		bestDiff := decimal.NewFromFloat(1e18)
 		for i := range changes {
 			if used[i] {
@@ -801,7 +745,6 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 
 	var senderNegIdx = -1
 	if txAccount != "" {
-		// берём крупнейший (по модулю) отрицательный остаток у отправителя (после свапа/фии)
 		best := decimal.Zero
 		for i := range changes {
 			if used[i] {
@@ -816,7 +759,6 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 	}
 
 	if senderNegIdx >= 0 && destPosIdx >= 0 {
-		// Проверяем, что обе дельты в допустимом диапазоне
 		if isWithinRange(changes[senderNegIdx].Delta) && isWithinRange(changes[destPosIdx].Delta) {
 			actions = append(actions, Action{
 				Kind: ActTransfer,
@@ -838,23 +780,17 @@ func BuildActionGroups(tx map[string]interface{}, changes []BalanceChange) []Act
 				},
 				Note: "Transfer (sender->destination, possibly cross-currency)",
 			})
-			// пометим Kind у изменений
 			changes[senderNegIdx].Kind = KindTransfer
 			changes[destPosIdx].Kind = KindTransfer
-			// Помечаем как использованные только если Transfer прошел проверку диапазона
 			used[senderNegIdx] = true
 			used[destPosIdx] = true
 		}
-		// Если Transfer не прошел проверку диапазона, не помечаем как used,
-		// чтобы эти изменения могли быть обработаны как Loss в конце
 	}
 
-	// 8) Остатки — как Loss или Payout (редкие случаи, например, частичные/мульти-пары)
 	for i := range changes {
 		if used[i] {
 			continue
 		}
-		// Проверяем, что дельта в допустимом диапазоне
 		if isWithinRange(changes[i].Delta) {
 			actionKind := ActLoss
 			note := "Loss (unpaired residue)"
@@ -886,16 +822,12 @@ func isWithinRange(val decimal.Decimal) bool {
 
 	abs := val.Abs()
 
-	// Получаем строковое представление с максимальной точностью (до 100 знаков после запятой)
-	// StringFixed(100) даст нам число без научной нотации
 	str := abs.StringFixed(100)
 
-	// Разбираем строку на целую и дробную части
 	parts := strings.Split(str, ".")
 	var intPart, fracPart string
 
 	if len(parts) == 1 {
-		// Нет дробной части
 		intPart = parts[0]
 		fracPart = ""
 	} else {
@@ -903,28 +835,22 @@ func isWithinRange(val decimal.Decimal) bool {
 		fracPart = parts[1]
 	}
 
-	// Убираем ведущие нули из целой части для подсчета значащих цифр
 	intPart = strings.TrimLeft(intPart, "0")
 	if intPart == "" {
 		intPart = "0"
 	}
 
-	// Убираем trailing zeros из дробной части
 	fracPart = strings.TrimRight(fracPart, "0")
 
-	// Убираем leading zeros из дробной части для подсчета только значащих цифр
-	// Ведущие нули в дробной части - это не значащие цифры, а просто позиция запятой
 	fracPartSignificant := strings.TrimLeft(fracPart, "0")
 	if fracPartSignificant == "" {
 		fracPartSignificant = "0"
 	}
 
-	// Проверяем: не более 38 знаков до запятой
 	if len(intPart) > 38 {
 		return false
 	}
 
-	// Проверяем: не более 18 значащих цифр после запятой
 	if len(fracPartSignificant) > 18 {
 		return false
 	}
@@ -938,15 +864,12 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 		hash = h
 	}
 
-	// Check transaction type
 	if tt, ok := tx["TransactionType"].(string); ok {
 		if tt != "Payment" {
-			// Only log if detailed logging is enabled (will check ledger_index later)
-			return 0, nil // Skip non-Payment transactions
+			return 0, nil
 		}
 	} else {
-		// Only log if detailed logging is enabled (will check ledger_index later)
-		return 0, nil // Skip transactions without type
+		return 0, nil
 	}
 
 	modified, err := indexer.ModifyTransaction(tx)
@@ -960,7 +883,6 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 		hash = h
 	}
 
-	// Get ledger_index - it can be float64, int, or uint32
 	var ledgerIndex float64
 	if li, ok := base["ledger_index"].(float64); ok {
 		ledgerIndex = li

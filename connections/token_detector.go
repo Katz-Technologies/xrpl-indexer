@@ -306,7 +306,7 @@ func CheckAndNotifyNewTokens(ctx context.Context, transactions []interface{}, le
 			// New token found!
 			newTokens = append(newTokens, token)
 		} else {
-			newTokens = append(newTokens, token) //Тут
+			newTokens = append(newTokens, token)
 			// Token has history but not in our DB, add it to known_tokens
 			tokensToAddToKnown = append(tokensToAddToKnown, token)
 		}

@@ -1,11 +1,3 @@
--- ======================================================
--- XRPL ClickHouse Schema v3 (без UUID)
--- Использует естественные уникальные поля XRPL
--- ======================================================
-
--- ==============================
--- XRP Prices (без изменений)
--- ==============================
 CREATE TABLE IF NOT EXISTS xrpl.xrp_prices
 (
   timestamp DateTime64(3, 'UTC'),
@@ -19,13 +11,6 @@ SETTINGS
   index_granularity = 8192,
   index_granularity_bytes = 10485760;
 
--- ============================
--- Assets таблица удалена - больше не нужна
--- ============================
-
--- ============================
--- Empty Ledgers (леджеры без Payment транзакций)
--- ============================
 CREATE TABLE IF NOT EXISTS xrpl.empty_ledgers
 (
   ledger_index UInt32,
@@ -40,32 +25,22 @@ SETTINGS
   index_granularity = 8192,
   index_granularity_bytes = 10485760;
 
--- Secondary indexes for empty ledgers
--- Note: These indexes may already exist. If you get an error, the indexes are already created.
--- You can safely ignore "index with this name already exists" errors or run these manually once.
 ALTER TABLE xrpl.empty_ledgers ADD INDEX IF NOT EXISTS idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
 ALTER TABLE xrpl.empty_ledgers ADD INDEX IF NOT EXISTS idx_close_time (close_time) TYPE minmax GRANULARITY 4;
 
--- Try to add indexes (will fail silently if they exist - this is expected)
--- Using a workaround: check system.data_skipping_indices first
--- For now, comment out and create manually if needed, or use the script below
-
--- ============================
--- Money Flow (объединенная таблица с данными транзакций)
--- ============================
 CREATE TABLE IF NOT EXISTS xrpl.money_flow
 (
-  tx_hash FixedString(64),                 -- PRIMARY KEY вместо tx_id UUID
-  ledger_index UInt32,                     -- из transactions
-  in_ledger_index UInt32,                  -- из transactions
-  close_time DateTime64(3, 'UTC'),         -- из transactions
-  fee_drops UInt64,                        -- из transactions
-  from_address String,                     -- адрес отправителя денежного потока
-  to_address String,                       -- адрес получателя денежного потока
-  from_currency String,                   -- валюта отправителя
-  from_issuer_address String,              -- эмитент валюты отправителя
-  to_currency String,                     -- валюта получателя
-  to_issuer_address String,               -- эмитент валюты получателя
+  tx_hash FixedString(64),
+  ledger_index UInt32,
+  in_ledger_index UInt32,
+  close_time DateTime64(3, 'UTC'),
+  fee_drops UInt64,
+  from_address String,
+  to_address String,
+  from_currency String,
+  from_issuer_address String,
+  to_currency String,
+  to_issuer_address String,
   from_amount Decimal(38, 18) CODEC(ZSTD(3)),
   to_amount Decimal(38, 18) CODEC(ZSTD(3)),
   init_from_amount Decimal(38, 18) CODEC(ZSTD(3)),
@@ -81,18 +56,12 @@ SETTINGS
   index_granularity = 8192,
   index_granularity_bytes = 10485760;
 
--- Secondary indexes for money_flow
--- Note: These indexes may already exist. If you get an error, the indexes are already created.
--- You can safely ignore "index with this name already exists" errors or run these manually once.
 ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_ledger_index (ledger_index) TYPE minmax GRANULARITY 4;
 ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_close_time (close_time) TYPE minmax GRANULARITY 4;
 ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_from_to (from_address, to_address) TYPE set(0) GRANULARITY 64;
 ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_kind (kind) TYPE set(0) GRANULARITY 64;
 ALTER TABLE xrpl.money_flow ADD INDEX IF NOT EXISTS idx_assets (from_currency, from_issuer_address, to_currency, to_issuer_address) TYPE set(0) GRANULARITY 64;
 
--- ============================
--- Known Tokens (известные токены)
--- ============================
 CREATE TABLE IF NOT EXISTS xrpl.known_tokens
 (
   currency String,
@@ -108,18 +77,12 @@ SETTINGS
   index_granularity = 8192,
   index_granularity_bytes = 10485760;
 
--- Secondary index for known tokens
--- Note: This index may already exist. If you get an error, the index is already created.
--- You can safely ignore "index with this name already exists" errors or run this manually once.
 ALTER TABLE xrpl.known_tokens ADD INDEX IF NOT EXISTS idx_currency_issuer (currency, issuer) TYPE set(0) GRANULARITY 64;
 
--- ============================
--- Subscription Links (таблица связка подписок)
--- ============================
 CREATE TABLE IF NOT EXISTS xrpl.subscription_links
 (
-  from_address String,                  -- адрес, который подписан
-  to_address String,               -- адрес на который подписан
+  from_address String,
+  to_address String,
 )
 ENGINE = MergeTree()
 ORDER BY (from_address, to_address)
@@ -127,9 +90,6 @@ SETTINGS
   index_granularity = 8192,
   index_granularity_bytes = 10485760;
 
--- Secondary indexes for subscription_links
--- Note: These indexes may already exist. If you get an error, the indexes are already created.
--- You can safely ignore "index with this name already exists" errors or run these manually once.
 ALTER TABLE xrpl.subscription_links ADD INDEX IF NOT EXISTS idx_subscriber (from_address) TYPE set(0) GRANULARITY 64;
 ALTER TABLE xrpl.subscription_links ADD INDEX IF NOT EXISTS idx_subscribed_to (to_address) TYPE set(0) GRANULARITY 64;
 

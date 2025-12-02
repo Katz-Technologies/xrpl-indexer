@@ -42,12 +42,11 @@ type MoneyFlowData struct {
 
 // SubscriptionActivityItem represents a single money flow with its subscribers
 type SubscriptionActivityItem struct {
-	Subscribers []string      `json:"subscribers"` // массив адресов подписчиков
-	MoneyFlow   MoneyFlowData `json:"money_flow"`  // данные транзакции
+	Subscribers []string      `json:"subscribers"`
+	MoneyFlow   MoneyFlowData `json:"money_flow"`
 }
 
 // SubscriptionActivityEvent represents a batch of subscription activities
-// Содержит массив транзакций, каждая с массивом подписчиков
 type SubscriptionActivityEvent struct {
-	Activities []SubscriptionActivityItem `json:"activities"` // массив транзакций с подписчиками
+	Activities []SubscriptionActivityItem `json:"activities"`
 }

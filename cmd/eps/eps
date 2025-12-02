@@ -1,9 +1,0 @@
-#!/bin/sh
-# ClickHouse PS
-#
-# 1. Copy this script to user accessible bin directory
-# 2. Ensure ClickHouse is reachable on localhost:8123
-
-echo "=== ClickHouse: transaction count ==="
-curl -s 'http://localhost:8123/?query=SELECT%20count()%20FROM%20xrpl.tx%20FORMAT%20Pretty'
-echo
