@@ -251,92 +251,15 @@ func CheckAndNotifyNewTokens(ctx context.Context, transactions []interface{}, le
 		}
 	}
 
-	// Convert map to slice for batch checking
+	// Convert map to slice
 	tokenSlice := make([]TokenInfo, 0, len(allTokens))
 	for _, token := range allTokens {
 		tokenSlice = append(tokenSlice, token)
 	}
 
-	// Batch check all tokens in ClickHouse (single query instead of N queries)
-	knownMap, err := AreTokensKnownBatch(ctx, tokenSlice)
-	if err != nil {
-		logger.Log.Warn().
-			Err(err).
-			Msg("Error batch checking tokens in ClickHouse, falling back to individual checks")
-		// Fallback to individual checks
-		knownMap = make(map[string]bool)
-		for _, token := range tokenSlice {
-			key := token.Currency + "|" + token.Issuer
-			known, err := IsTokenKnown(ctx, token.Currency, token.Issuer)
-			if err == nil {
-				knownMap[key] = known
-			}
-		}
-	}
-
-	// Check each token
-	newTokens := make([]TokenInfo, 0)
-	tokensToAddToKnown := make([]TokenInfo, 0)
-
+	// Process all tokens as new tokens
 	for _, token := range tokenSlice {
-		key := token.Currency + "|" + token.Issuer
-		known := knownMap[key]
-
-		if known {
-			// Token already known, skip
-			continue
-		}
-
-		// Not found in ClickHouse, check via XRPL API
-		// Note: XRPL API doesn't support batch requests, so we check individually
-		// but we could parallelize this if needed
-		hasHistory, err := CheckTokenViaXRPLAPI(ctx, token.Currency, token.Issuer)
-		if err != nil {
-			logger.Log.Warn().
-				Err(err).
-				Str("currency", token.Currency).
-				Str("issuer", token.Issuer).
-				Msg("Error checking token via XRPL API, assuming new token")
-			// On error, assume it's a new token
-			newTokens = append(newTokens, token)
-			continue
-		}
-
-		if !hasHistory {
-			// New token found!
-			newTokens = append(newTokens, token)
-		} else {
-			newTokens = append(newTokens, token) //Тут
-			// Token has history but not in our DB, add it to known_tokens
-			tokensToAddToKnown = append(tokensToAddToKnown, token)
-		}
-	}
-
-	// Batch add tokens that have history but weren't in our DB
-	for _, token := range tokensToAddToKnown {
-		err = AddKnownToken(ctx, token.Currency, token.Issuer, ledgerIndex, ledgerTimestamp)
-		if err != nil {
-			logger.Log.Warn().
-				Err(err).
-				Str("currency", token.Currency).
-				Str("issuer", token.Issuer).
-				Msg("Failed to add known token to database")
-		}
-	}
-
-	// Add new tokens to known_tokens and notify
-	for _, token := range newTokens {
-		err := AddKnownToken(ctx, token.Currency, token.Issuer, ledgerIndex, ledgerTimestamp)
-		if err != nil {
-			logger.Log.Error().
-				Err(err).
-				Str("currency", token.Currency).
-				Str("issuer", token.Issuer).
-				Msg("Failed to add new token to database")
-			continue
-		}
-
-		err = AddNewToken(ctx, token.Currency, token.Issuer, ledgerIndex, token.InLedgerIndex)
+		err := AddNewToken(ctx, token.Currency, token.Issuer, ledgerIndex, token.InLedgerIndex)
 		if err != nil {
 			logger.Log.Error().
 				Err(err).

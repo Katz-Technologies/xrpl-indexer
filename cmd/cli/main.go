@@ -23,7 +23,7 @@ func root(args []string) error {
 
 	cmds := []Runner{
 		NewBackfillCommand(),
-		NewImportTokensCommand(),
+		NewImportXrplmetaTokensCommand(),
 	}
 
 	for _, cmd := range cmds {

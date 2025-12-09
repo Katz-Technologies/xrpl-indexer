@@ -18,7 +18,11 @@ func EnvLoad(filenames ...string) {
 		log.Printf("Loading configuration file: %s", filename)
 		err := godotenv.Load(filename)
 		if err != nil {
-			log.Fatalf("Error loading configuration file: %s", filename)
+			log.Printf("Error loading configuration file %s: %v", filename, err)
+			// Don't fatal - allow process to continue with environment variables
+			// that might be set directly
+		} else {
+			log.Printf("Successfully loaded configuration file: %s", filename)
 		}
 	}
 }
@@ -135,7 +139,7 @@ func EnvClickHouseBatchSize() int {
 	if v, err := strconv.Atoi(os.Getenv("CLICKHOUSE_BATCH_SIZE")); err == nil && v > 0 {
 		return v
 	}
-	return 5000 // default 1000 rows per batch
+	return 500 // default 500 rows per batch
 }
 
 // Batch timeout in milliseconds for ClickHouse inserts
@@ -143,7 +147,7 @@ func EnvClickHouseBatchTimeoutMs() int {
 	if v, err := strconv.Atoi(os.Getenv("CLICKHOUSE_BATCH_TIMEOUT_MS")); err == nil && v > 0 {
 		return v
 	}
-	return 5000 // default 1 second
+	return 60000 // default 60 seconds (to allow batch to accumulate to CLICKHOUSE_BATCH_SIZE)
 }
 
 /*

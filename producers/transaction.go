@@ -72,8 +72,9 @@ func ProcessTransactionsDirectly(message []byte, isRealtime bool) {
 	ledgerTimestamp := time.Unix(int64(closeTime)+rippleToUnix, 0).UTC()
 
 	// Check for new tokens (only for real-time ledgers to avoid API spam during backfill)
+	// Skip token detection in indexer mode - orchestrator handles ClickHouse writes
 	// This runs asynchronously in a separate goroutine to not block transaction processing
-	if isRealtime {
+	if isRealtime && GetIPCProtocol() == nil {
 		// Use background context with longer timeout for token checking
 		// This allows retries to complete even if they take longer
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -109,33 +110,87 @@ func ProcessTransactionsDirectly(message []byte, isRealtime bool) {
 		}()
 	}
 
-	// Process transactions directly and write to ClickHouse
-	for _, txo := range txs {
-		tx, ok := txo.(map[string]interface{})
-		if !ok {
-			logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Msg("Error asserting transaction type")
-			continue
+	// Check if we're in subprocess mode (IPC mode)
+	ipcProtocol := GetIPCProtocol()
+	if ipcProtocol != nil {
+		// Subprocess mode: send transactions via IPC to orchestrator
+		logger.Log.Debug().
+			Uint32("ledger_index", ledger.LedgerIndex).
+			Int("total_txs", len(txs)).
+			Msg("Processing ledger in IPC mode")
+
+		preparedTxs := make([]map[string]interface{}, 0, len(txs))
+		for _, txo := range txs {
+			tx, ok := txo.(map[string]interface{})
+			if !ok {
+				logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Msg("Error asserting transaction type")
+				continue
+			}
+
+			// Transactions fetched by `ledger` command do not have date, validated,
+			// ledger_index fields. Populating these tx fields from ledger data.
+			// Use float64 for ledger_index to match XRPL format
+			tx["ledger_index"] = float64(ledgerIndex)
+			tx["date"] = closeTime
+			tx["validated"] = true
+
+			var base xrpl.BaseResponse = tx
+			hash, _ := base["hash"].(string)
+			if hash == "" {
+				// Skip malformed tx
+				continue
+			}
+
+			preparedTxs = append(preparedTxs, tx)
 		}
 
-		// Transactions fetched by `ledger` command do not have date, validated,
-		// ledger_index fields. Populating these tx fields from ledger data.
-		// Use float64 for ledger_index to match XRPL format
-		tx["ledger_index"] = float64(ledgerIndex)
-		tx["date"] = closeTime
-		tx["validated"] = true
-
-		var base xrpl.BaseResponse = tx
-		hash, _ := base["hash"].(string)
-		if hash == "" {
-			// Skip malformed tx
-			continue
+		// Send batch via IPC
+		if len(preparedTxs) > 0 {
+			if sent := SendBatchTransactionsViaIPC(preparedTxs); sent {
+				logger.Log.Debug().
+					Uint32("ledger_index", ledger.LedgerIndex).
+					Int("txs_sent", len(preparedTxs)).
+					Msg("Sent transactions batch via IPC")
+			} else {
+				logger.Log.Error().
+					Uint32("ledger_index", ledger.LedgerIndex).
+					Int("txs_count", len(preparedTxs)).
+					Msg("Failed to send transactions batch via IPC")
+			}
+		} else {
+			logger.Log.Debug().
+				Uint32("ledger_index", ledger.LedgerIndex).
+				Msg("No transactions to send via IPC")
 		}
+	} else {
+		// Standalone mode: process transactions directly and write to ClickHouse
+		for _, txo := range txs {
+			tx, ok := txo.(map[string]interface{})
+			if !ok {
+				logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Msg("Error asserting transaction type")
+				continue
+			}
 
-		// Process transaction directly and write to ClickHouse
-		_, err := consumers.ProcessTransaction(tx)
-		if err != nil {
-			logger.Log.Error().Err(err).Str("tx_hash", hash).Uint32("ledger_index", ledger.LedgerIndex).Msg("Failed to process transaction")
-			// Continue processing other transactions even if one fails
+			// Transactions fetched by `ledger` command do not have date, validated,
+			// ledger_index fields. Populating these tx fields from ledger data.
+			// Use float64 for ledger_index to match XRPL format
+			tx["ledger_index"] = float64(ledgerIndex)
+			tx["date"] = closeTime
+			tx["validated"] = true
+
+			var base xrpl.BaseResponse = tx
+			hash, _ := base["hash"].(string)
+			if hash == "" {
+				// Skip malformed tx
+				continue
+			}
+
+			// Process transaction directly and write to ClickHouse
+			_, err := consumers.ProcessTransaction(tx)
+			if err != nil {
+				logger.Log.Error().Err(err).Str("tx_hash", hash).Uint32("ledger_index", ledger.LedgerIndex).Msg("Failed to process transaction")
+				// Continue processing other transactions even if one fails
+			}
 		}
 	}
 }

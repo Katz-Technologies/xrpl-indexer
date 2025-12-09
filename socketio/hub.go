@@ -207,7 +207,7 @@ func (h *Hub) EmitNewTokenDetected(event NewTokenDetectedEvent) {
 	h.mu.RUnlock()
 
 	if len(clients) == 0 {
-		logger.Log.Warn().Msg("EmitNewTokenDetected: no clients connected")
+		logger.Log.Debug().Msg("EmitNewTokenDetected: no clients connected")
 		return
 	}
 

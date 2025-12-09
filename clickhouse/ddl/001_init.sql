@@ -97,8 +97,6 @@ CREATE TABLE IF NOT EXISTS xrpl.known_tokens
 (
   currency String,
   issuer String,
-  first_seen_ledger_index UInt32,
-  first_seen_timestamp DateTime64(3, 'UTC'),
   created_at DateTime64(3, 'UTC') DEFAULT now64(),
   version UInt64 DEFAULT now64()
 )
