@@ -27,6 +27,132 @@ type TokenInfo struct {
 	InLedgerIndex uint32 // Index of the transaction within the ledger where this token was found
 }
 
+// AreTokensKnownBatch checks if tokens exist in known_tokens table
+// Returns a map of token key (currency|issuer) to whether it's known
+func AreTokensKnownBatch(ctx context.Context, tokens []TokenInfo) (map[string]bool, error) {
+
+	if ClickHouseConn == nil {
+		return nil, fmt.Errorf("ClickHouse connection not initialized")
+	}
+
+	result := make(map[string]bool)
+
+	// Filter out XRP and empty tokens
+	validTokens := make([]TokenInfo, 0)
+	for _, token := range tokens {
+		if token.Currency == "XRP" || token.Currency == "" || token.Issuer == "" {
+			key := token.Currency + "|" + token.Issuer
+			result[key] = true // XRP is always "known"
+			continue
+		}
+		validTokens = append(validTokens, token)
+	}
+
+	if len(validTokens) == 0 {
+		logger.Log.Debug().Msg("No valid tokens to check in known_tokens")
+		return result, nil
+	}
+
+	logger.Log.Info().
+		Int("total_tokens", len(tokens)).
+		Int("valid_tokens", len(validTokens)).
+		Msg("Checking tokens in known_tokens table")
+
+	// Log sample tokens being checked (first 5)
+	sampleCount := 5
+	if len(validTokens) < sampleCount {
+		sampleCount = len(validTokens)
+	}
+	for i := 0; i < sampleCount; i++ {
+		logger.Log.Debug().
+			Str("currency", validTokens[i].Currency).
+			Str("issuer", validTokens[i].Issuer).
+			Msg("Checking token in known_tokens")
+	}
+	if len(validTokens) > sampleCount {
+		logger.Log.Debug().
+			Int("remaining", len(validTokens)-sampleCount).
+			Msg("... and more tokens to check")
+	}
+
+	// Process in batches to avoid query size limits
+	batchSize := 500
+	foundCount := 0
+	for i := 0; i < len(validTokens); i += batchSize {
+		end := i + batchSize
+		if end > len(validTokens) {
+			end = len(validTokens)
+		}
+
+		batch := validTokens[i:end]
+
+		// Build WHERE clause for batch check in known_tokens
+		var conditions []string
+		for _, token := range batch {
+			currencyEscaped := strings.ReplaceAll(token.Currency, "'", "''")
+			issuerEscaped := strings.ReplaceAll(token.Issuer, "'", "''")
+			conditions = append(conditions,
+				fmt.Sprintf("(currency = '%s' AND issuer = '%s')", currencyEscaped, issuerEscaped))
+		}
+
+		// Check in known_tokens table (batch query)
+		query := fmt.Sprintf(`
+			SELECT currency, issuer
+			FROM xrpl.known_tokens 
+			WHERE %s
+		`, strings.Join(conditions, " OR "))
+
+		logger.Log.Debug().Str("query", query).Msg("Executing query to check tokens in known_tokens")
+
+		rows, err := ClickHouseConn.Query(ctx, query)
+		if err != nil {
+			logger.Log.Warn().
+				Err(err).
+				Int("batch_start", i+1).
+				Int("batch_end", end).
+				Msg("Error querying known_tokens batch")
+			continue
+		}
+
+		batchFound := 0
+		for rows.Next() {
+			var currency, issuer string
+			if err := rows.Scan(&currency, &issuer); err == nil {
+				key := currency + "|" + issuer
+				result[key] = true
+				batchFound++
+				foundCount++
+			}
+		}
+		rows.Close()
+
+		logger.Log.Debug().
+			Int("batch_start", i+1).
+			Int("batch_end", end).
+			Int("batch_size", len(batch)).
+			Int("found_in_batch", batchFound).
+			Msg("Checked token batch in known_tokens")
+	}
+
+	// Initialize all tokens in result map (set to false if not found)
+	notFoundCount := 0
+	for _, token := range validTokens {
+		key := token.Currency + "|" + token.Issuer
+		if _, exists := result[key]; !exists {
+			result[key] = false
+			notFoundCount++
+		}
+	}
+
+	logger.Log.Info().
+		Int("total_checked", len(validTokens)).
+		Int("found_in_db", foundCount).
+		Int("not_found", notFoundCount).
+		Msg("Finished checking tokens in known_tokens")
+
+	return result, nil
+}
+
 // AddNewToken adds a new token to the new_tokens table
 func AddNewToken(ctx context.Context, currency, issuer string, ledgerIndex uint32, inLedgerIndex uint32) error {
 	if ClickHouseConn == nil {

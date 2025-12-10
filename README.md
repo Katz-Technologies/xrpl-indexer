@@ -185,6 +185,12 @@ make build
 ```bash
 ./bin/platform-cli import-xrplmeta-tokens
 ```
+
+Запуск оркестратора индексации в релаьном времени
+
+```bash
+./bin/indexer-orchestrator --server-path ./bin/platform-server --config .env
+```
 ## ⚙️ Конфигурация
 
 Все настройки конфигурируются через переменные окружения в файле `.env`.

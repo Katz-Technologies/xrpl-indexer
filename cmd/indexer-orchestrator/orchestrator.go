@@ -281,7 +281,7 @@ func (o *IndexerOrchestrator) processTransaction(data interface{}, workerID int)
 	o.hashMutex.Unlock()
 
 	// Process transaction
-	_, err = consumers.ProcessTransaction(tx)
+	_, _, err = consumers.ProcessTransaction(tx)
 	if err != nil {
 		log.Printf("[INDEXER-ORCHESTRATOR] Error processing transaction %s from worker %d: %v", hash, workerID, err)
 		// Remove from processed hashes on error so it can be retried
@@ -338,49 +338,23 @@ func getLedgerTimestamp(tx map[string]interface{}) time.Time {
 // onBatchFlush is called after a batch is flushed to ClickHouse
 // It triggers token detection for all ledgers that were in the batch
 func (o *IndexerOrchestrator) onBatchFlush(batch []connections.MoneyFlowRow) {
-	// Extract unique ledger indices from the batch
-	ledgerSet := make(map[uint32]bool)
-	for _, row := range batch {
-		ledgerSet[row.LedgerIndex] = true
-	}
-
-	// Check tokens for each ledger in the batch
-	for ledgerIndex := range ledgerSet {
-		o.checkTokensForLedger(ledgerIndex)
-	}
-}
-
-// checkTokensForLedger checks for new tokens in a ledger
-func (o *IndexerOrchestrator) checkTokensForLedger(ledgerIndex uint32) {
-	o.ledgerMutex.Lock()
-	txs := o.ledgerTransactions[ledgerIndex]
-	timestamp := o.ledgerTimestamps[ledgerIndex]
-	// Clear after processing to avoid memory leak
-	delete(o.ledgerTransactions, ledgerIndex)
-	delete(o.ledgerTimestamps, ledgerIndex)
-	o.ledgerMutex.Unlock()
-
-	if len(txs) == 0 {
+	if len(batch) == 0 {
 		return
 	}
 
-	// Convert to []interface{} for CheckAndNotifyNewTokens
-	txSlice := make([]interface{}, len(txs))
-	for i, tx := range txs {
-		txSlice[i] = tx
+	// Group money flows by ledger index
+	ledgerFlows := make(map[uint32][]connections.MoneyFlowRow)
+	for _, row := range batch {
+		ledgerFlows[row.LedgerIndex] = append(ledgerFlows[row.LedgerIndex], row)
 	}
 
-	// Use background context with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	// If timestamp is zero, use current time
-	if timestamp.IsZero() {
-		timestamp = time.Now().UTC()
-	}
-
-	if err := connections.CheckAndNotifyNewTokens(ctx, txSlice, ledgerIndex, timestamp); err != nil {
-		log.Printf("[INDEXER-ORCHESTRATOR] Error checking tokens for ledger %d: %v", ledgerIndex, err)
+	// Check tokens for each ledger in the batch
+	for ledgerIndex, flows := range ledgerFlows {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		if err := connections.CheckAndNotifyNewTokens(ctx, flows, ledgerIndex); err != nil {
+			log.Printf("[INDEXER-ORCHESTRATOR] Error checking tokens for ledger %d: %v", ledgerIndex, err)
+		}
+		cancel()
 	}
 }
 

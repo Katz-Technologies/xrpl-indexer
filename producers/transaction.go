@@ -67,48 +67,8 @@ func ProcessTransactionsDirectly(message []byte, isRealtime bool) {
 		return
 	}
 
-	// Convert closeTime to time.Time for token checking
-	const rippleToUnix int64 = 946684800
-	ledgerTimestamp := time.Unix(int64(closeTime)+rippleToUnix, 0).UTC()
-
-	// Check for new tokens (only for real-time ledgers to avoid API spam during backfill)
-	// Skip token detection in indexer mode - orchestrator handles ClickHouse writes
-	// This runs asynchronously in a separate goroutine to not block transaction processing
-	if isRealtime && GetIPCProtocol() == nil {
-		// Use background context with longer timeout for token checking
-		// This allows retries to complete even if they take longer
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-
-		// Prepare transactions for token checking (need to populate ledger_index and date first)
-		// IMPORTANT: Copy transactions before passing to goroutine to avoid concurrent map access
-		preparedTxs := make([]interface{}, 0, len(txs))
-		for _, txo := range txs {
-			tx, ok := txo.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			// Populate required fields
-			tx["ledger_index"] = float64(ledgerIndex)
-			tx["date"] = closeTime
-			tx["validated"] = true
-			preparedTxs = append(preparedTxs, tx)
-		}
-
-		// Deep copy transactions before passing to goroutine to avoid concurrent map access
-		copiedTxs := connections.DeepCopyTransactions(preparedTxs)
-
-		// Check for new tokens asynchronously to not block transaction processing
-		// This goroutine runs independently and won't block the main indexing flow
-		go func() {
-			defer cancel() // Ensure context is cancelled when done
-			if err := connections.CheckAndNotifyNewTokens(ctx, copiedTxs, ledger.LedgerIndex, ledgerTimestamp); err != nil {
-				logger.Log.Warn().
-					Err(err).
-					Uint32("ledger_index", ledger.LedgerIndex).
-					Msg("Error checking for new tokens (non-blocking)")
-			}
-		}()
-	}
+	// Token detection is now handled in ProcessTransaction via money_flow records
+	// No need to check tokens here anymore
 
 	// Check if we're in subprocess mode (IPC mode)
 	ipcProtocol := GetIPCProtocol()
@@ -164,6 +124,7 @@ func ProcessTransactionsDirectly(message []byte, isRealtime bool) {
 		}
 	} else {
 		// Standalone mode: process transactions directly and write to ClickHouse
+		allMoneyFlows := make([]connections.MoneyFlowRow, 0)
 		for _, txo := range txs {
 			tx, ok := txo.(map[string]interface{})
 			if !ok {
@@ -186,10 +147,24 @@ func ProcessTransactionsDirectly(message []byte, isRealtime bool) {
 			}
 
 			// Process transaction directly and write to ClickHouse
-			_, err := consumers.ProcessTransaction(tx)
+			_, moneyFlows, err := consumers.ProcessTransaction(tx)
 			if err != nil {
 				logger.Log.Error().Err(err).Str("tx_hash", hash).Uint32("ledger_index", ledger.LedgerIndex).Msg("Failed to process transaction")
 				// Continue processing other transactions even if one fails
+			} else {
+				allMoneyFlows = append(allMoneyFlows, moneyFlows...)
+			}
+		}
+
+		// Check for new tokens from all payout money flows
+		if len(allMoneyFlows) > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := connections.CheckAndNotifyNewTokens(ctx, allMoneyFlows, ledger.LedgerIndex); err != nil {
+				logger.Log.Warn().
+					Err(err).
+					Uint32("ledger_index", ledger.LedgerIndex).
+					Msg("Error checking for new tokens")
 			}
 		}
 	}
