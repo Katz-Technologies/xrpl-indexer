@@ -271,7 +271,6 @@ func (o *IndexerOrchestrator) processTransaction(data interface{}, workerID int)
 	o.hashMutex.RUnlock()
 
 	if alreadyProcessed {
-		log.Printf("[INDEXER-ORCHESTRATOR] Duplicate transaction %s from worker %d, skipping", hash, workerID)
 		return
 	}
 
@@ -304,8 +303,6 @@ func (o *IndexerOrchestrator) processTransaction(data interface{}, workerID int)
 		o.ledgerMutex.Unlock()
 		// Note: Token detection is now triggered after batch flush, not immediately
 	}
-
-	log.Printf("[INDEXER-ORCHESTRATOR] Successfully processed transaction %s from worker %d", hash, workerID)
 }
 
 // Helper functions to extract ledger info from transaction

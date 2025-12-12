@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/xrpscan/platform/logger"
+	"github.com/xrpscan/platform/socketio"
 )
 
 // deepCopyMap creates a deep copy of map[string]interface{} to avoid concurrent access issues
@@ -361,7 +362,8 @@ func CheckAndNotifyNewTokens(ctx context.Context, moneyFlows []MoneyFlowRow, led
 		// Token is new - add to new_tokens table
 		newTokensCount++
 
-		err := AddNewToken(ctx, token.Currency, token.Issuer, ledgerIndex, token.InLedgerIndex)
+		now := time.Now().UTC()
+		err := AddNewToken(ctx, token.Currency, token.Issuer, ledgerIndex, token.InLedgerIndex, now)
 		if err != nil {
 			logger.Log.Error().
 				Err(err).
@@ -390,6 +392,16 @@ func CheckAndNotifyNewTokens(ctx context.Context, moneyFlows []MoneyFlowRow, led
 		}
 
 		logEntry.Msg("New token detected and added to new_tokens")
+
+		// Emit SocketIO notification
+		hub := socketio.GetHub()
+		event := socketio.NewTokenDetectedEvent{
+			Currency:    token.Currency,
+			Issuer:      token.Issuer,
+			LedgerIndex: ledgerIndex,
+			Timestamp:   now.Unix(),
+		}
+		hub.EmitNewTokenDetected(event)
 	}
 
 	logger.Log.Info().

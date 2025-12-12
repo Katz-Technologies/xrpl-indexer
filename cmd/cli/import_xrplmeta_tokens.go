@@ -443,7 +443,6 @@ func importTokenBatch(ctx context.Context, tokens []TokenPair) error {
 	}
 
 	now := time.Now().UTC()
-	timestampStr := now.Format("2006-01-02 15:04:05.000")
 	version := uint64(now.Unix())
 
 	// Build INSERT query with multiple VALUES
@@ -456,7 +455,6 @@ func importTokenBatch(ctx context.Context, tokens []TokenPair) error {
 			"('%s', '%s', toDateTime64('%s', 3, 'UTC'), %d)",
 			currencyEscaped,
 			issuerEscaped,
-			timestampStr,
 			version,
 		))
 	}

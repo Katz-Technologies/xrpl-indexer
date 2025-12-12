@@ -153,22 +153,44 @@ func AreTokensKnownBatch(ctx context.Context, tokens []TokenInfo) (map[string]bo
 	return result, nil
 }
 
-// AddNewToken adds a new token to the new_tokens table
-func AddNewToken(ctx context.Context, currency, issuer string, ledgerIndex uint32, inLedgerIndex uint32) error {
+// AddNewToken adds a new token to both new_tokens and known_tokens tables
+func AddNewToken(ctx context.Context, currency, issuer string, ledgerIndex uint32, inLedgerIndex uint32, timestamp time.Time) error {
 	if ClickHouseConn == nil {
 		return fmt.Errorf("ClickHouse connection not initialized")
 	}
 
-	query := fmt.Sprintf(`
+	// Format timestamp for ClickHouse DateTime64(3, 'UTC')
+	timestampStr := timestamp.UTC().Format("2006-01-02 15:04:05.000")
+
+	// Escape single quotes in currency and issuer to prevent SQL injection
+	currencyEscaped := strings.ReplaceAll(currency, "'", "''")
+	issuerEscaped := strings.ReplaceAll(issuer, "'", "''")
+
+	// Version for ReplacingMergeTree (use Unix timestamp)
+	version := uint64(timestamp.UTC().Unix())
+
+	// Insert into new_tokens table
+	queryNewTokens := fmt.Sprintf(`
 		INSERT INTO xrpl.new_tokens 
-		(currency_code, issuer, first_seen_ledger_index, first_seen_in_ledger_index)
-		VALUES ('%s', '%s', %d, %d)
-	`, currency, issuer, ledgerIndex, inLedgerIndex)
+		(currency_code, issuer, first_seen_ledger_index, first_seen_in_ledger_index, create_timestamp)
+		VALUES ('%s', '%s', %d, %d, toDateTime64('%s', 3, 'UTC'))
+	`, currencyEscaped, issuerEscaped, ledgerIndex, inLedgerIndex, timestampStr)
 
-	err := ClickHouseConn.Exec(ctx, query)
-
+	err := ClickHouseConn.Exec(ctx, queryNewTokens)
 	if err != nil {
-		return fmt.Errorf("failed to insert new token: %w", err)
+		return fmt.Errorf("failed to insert new token into new_tokens: %w", err)
+	}
+
+	// Insert into known_tokens table to prevent duplicates
+	queryKnownTokens := fmt.Sprintf(`
+		INSERT INTO xrpl.known_tokens 
+		(currency, issuer, version)
+		VALUES ('%s', '%s', %d)
+	`, currencyEscaped, issuerEscaped, version)
+
+	err = ClickHouseConn.Exec(ctx, queryKnownTokens)
+	if err != nil {
+		return fmt.Errorf("failed to insert new token into known_tokens: %w", err)
 	}
 
 	return nil
