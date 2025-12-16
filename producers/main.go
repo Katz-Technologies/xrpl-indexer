@@ -12,6 +12,7 @@ import (
 var lastSeenLedgerIndex uint32
 
 func RunProducers() {
+	logger.Log.Info().Msg("Producers started, waiting for ledgers...")
 	for {
 		select {
 		case ledger := <-connections.XrplClient.StreamLedger:

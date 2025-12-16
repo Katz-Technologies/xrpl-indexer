@@ -42,6 +42,68 @@ services:
     command: -c "for f in /ddl/*.sql; do echo Running $$f; clickhouse-client --host clickhouse --user=katz --password=katz-password --multiquery < $$f; done"
     restart: "no"
 
+  indexer-orchestrator:
+    build:
+      context: .
+      dockerfile: cmd/indexer-orchestrator/Dockerfile
+    container_name: indexer-orchestrator
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      clickhouse-init:
+        condition: service_completed_successfully
+    environment:
+      # Server settings
+      SERVER_HOST: "0.0.0.0"
+      SERVER_PORT: "3002"
+      
+      # Logging
+      LOG_LEVEL: "info"
+      LOG_TYPE: "console"
+      LOG_FILE_ENABLED: "true"
+      LOG_FILE_PATH: "logs/platform.log"
+      LOG_FILE_MAX_SIZE_MB: "100"
+      LOG_FILE_MAX_BACKUPS: "3"
+      LOG_FILE_MAX_AGE_DAYS: "7"
+      
+      # ClickHouse connection
+      CLICKHOUSE_HOST: "clickhouse"
+      CLICKHOUSE_PORT: "9000"
+      CLICKHOUSE_DATABASE: "xrpl"
+      CLICKHOUSE_USER: "katz"
+      CLICKHOUSE_PASSWORD: "katz-password"
+      CLICKHOUSE_BATCH_SIZE: "5000"
+      CLICKHOUSE_BATCH_TIMEOUT_MS: "5000"
+      
+      # XRPL settings (used by workers, can be overridden via command)
+      XRPL_WEBSOCKET_URL: "wss://s1.ripple.com/"
+      XRPL_WEBSOCKET_FULLHISTORY_URL: "wss://xrplcluster.com/"
+    volumes:
+      - ./logs:/app/logs
+    ports:
+      - "8080:3002"
+    restart: unless-stopped
+    command:
+      - "./platform-indexer-orchestrator"
+      - "--workers"
+      - "2"
+      - "--config"
+      - ".env"
+      - "--server-path"
+      - "./bin/platform-server"
+      - "--log-file"
+      - "logs/indexer-orchestrator.log"
+      - "--check-interval"
+      - "10s"
+      - "--servers"
+      - "wss://s1.ripple.com/,wss://s2.ripple.com/,wss://xrplcluster.com/"
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f platform-indexer-orchestrator > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
 volumes:
   clickhouse-data:
     driver: local

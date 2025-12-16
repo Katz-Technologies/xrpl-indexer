@@ -2,6 +2,11 @@ package connections
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/xrpscan/platform/logger"
@@ -66,13 +71,36 @@ func DeepCopyTransactions(transactions []interface{}) []interface{} {
 	return copied
 }
 
+// TokenExtractionInfo contains information about where a token was extracted from
+type TokenExtractionInfo struct {
+	TokenInfo
+	TxHash      string
+	TxType      string
+	SourceField string // Field from which token was extracted (Amount, SendMax, etc.)
+}
+
 // ExtractTokensFromTransaction extracts all unique tokens (currency, issuer) from a transaction
 // Note: The transaction map should already be copied before calling this function if it will be used concurrently
-func ExtractTokensFromTransaction(tx map[string]interface{}, inLedgerIndex uint32) []TokenInfo {
-	tokens := make(map[string]TokenInfo)
+// Returns tokens with information about where they were extracted from
+func ExtractTokensFromTransaction(tx map[string]interface{}, inLedgerIndex uint32) []TokenExtractionInfo {
+	tokens := make(map[string]TokenExtractionInfo)
+
+	// Get transaction hash
+	txHash := ""
+	if hash, ok := tx["hash"].(string); ok {
+		txHash = hash
+	} else if hash, ok := tx["Hash"].(string); ok {
+		txHash = hash
+	}
+
+	// Get transaction type
+	txType := ""
+	if txTypeVal, ok := tx["TransactionType"].(string); ok {
+		txType = txTypeVal
+	}
 
 	// Helper function to add token
-	addToken := func(currency, issuer string) {
+	addToken := func(currency, issuer string, sourceField string) {
 		if currency == "" || currency == "XRP" {
 			return
 		}
@@ -80,77 +108,77 @@ func ExtractTokensFromTransaction(tx map[string]interface{}, inLedgerIndex uint3
 			return
 		}
 		key := currency + "|" + issuer
-		tokens[key] = TokenInfo{Currency: currency, Issuer: issuer, InLedgerIndex: inLedgerIndex}
-	}
-
-	// Extract from Amount field
-	if amount, ok := tx["Amount"].(map[string]interface{}); ok {
-		if currency, _ := amount["currency"].(string); currency != "" {
-			if issuer, _ := amount["issuer"].(string); issuer != "" {
-				addToken(currency, issuer)
+		// Keep the first occurrence (earliest inLedgerIndex)
+		if existing, exists := tokens[key]; !exists || inLedgerIndex < existing.InLedgerIndex {
+			tokens[key] = TokenExtractionInfo{
+				TokenInfo: TokenInfo{
+					Currency:      currency,
+					Issuer:        issuer,
+					InLedgerIndex: inLedgerIndex,
+				},
+				TxHash:      txHash,
+				TxType:      txType,
+				SourceField: sourceField,
 			}
 		}
+	}
+
+	// Helper function to extract token from a field (same logic as detectTokenIssuer in consumers/consumers.go)
+	extractFromField := func(field interface{}, sourceFieldName string) {
+		if m, ok := field.(map[string]interface{}); ok {
+			currency, _ := m["currency"].(string)
+			issuer, _ := m["issuer"].(string)
+			if currency != "" && issuer != "" {
+				addToken(currency, issuer, sourceFieldName)
+			}
+		}
+	}
+
+	// Extract from Amount field (same priority as in detectTokenIssuer)
+	if amount := tx["Amount"]; amount != nil {
+		extractFromField(amount, "Amount")
 	}
 
 	// Extract from SendMax field
-	if sendMax, ok := tx["SendMax"].(map[string]interface{}); ok {
-		if currency, _ := sendMax["currency"].(string); currency != "" {
-			if issuer, _ := sendMax["issuer"].(string); issuer != "" {
-				addToken(currency, issuer)
-			}
-		}
+	if sendMax := tx["SendMax"]; sendMax != nil {
+		extractFromField(sendMax, "SendMax")
 	}
 
 	// Extract from DeliverMin field
-	if deliverMin, ok := tx["DeliverMin"].(map[string]interface{}); ok {
-		if currency, _ := deliverMin["currency"].(string); currency != "" {
-			if issuer, _ := deliverMin["issuer"].(string); issuer != "" {
-				addToken(currency, issuer)
-			}
-		}
+	if deliverMin := tx["DeliverMin"]; deliverMin != nil {
+		extractFromField(deliverMin, "DeliverMin")
+	}
+
+	// Extract from DeliverMax field
+	if deliverMax := tx["DeliverMax"]; deliverMax != nil {
+		extractFromField(deliverMax, "DeliverMax")
 	}
 
 	// Extract from LimitAmount (TrustSet)
-	if limitAmount, ok := tx["LimitAmount"].(map[string]interface{}); ok {
-		if currency, _ := limitAmount["currency"].(string); currency != "" {
-			if issuer, _ := limitAmount["issuer"].(string); issuer != "" {
-				addToken(currency, issuer)
-			}
-		}
+	if limitAmount := tx["LimitAmount"]; limitAmount != nil {
+		extractFromField(limitAmount, "LimitAmount")
 	}
 
-	// Extract from meta.AffectedNodes (RippleState)
+	// Extract from meta.DeliveredAmount / meta.delivered_amount (same priority as in detectTokenIssuer)
 	if meta, ok := tx["meta"].(map[string]interface{}); ok {
-		if nodes, ok := meta["AffectedNodes"].([]interface{}); ok {
-			for _, rawNode := range nodes {
-				nodeMap, ok := rawNode.(map[string]interface{})
-				if !ok {
-					continue
-				}
-
-				// Check CreatedNode
-				if createdNode, ok := nodeMap["CreatedNode"].(map[string]interface{}); ok {
-					if ledgerType, _ := createdNode["LedgerEntryType"].(string); ledgerType == "RippleState" {
-						if newFields, ok := createdNode["NewFields"].(map[string]interface{}); ok {
-							extractTokenFromRippleState(newFields, addToken)
-						}
-					}
-				}
-
-				// Check ModifiedNode
-				if modifiedNode, ok := nodeMap["ModifiedNode"].(map[string]interface{}); ok {
-					if ledgerType, _ := modifiedNode["LedgerEntryType"].(string); ledgerType == "RippleState" {
-						if finalFields, ok := modifiedNode["FinalFields"].(map[string]interface{}); ok {
-							extractTokenFromRippleState(finalFields, addToken)
-						}
-					}
-				}
-			}
+		// Check DeliveredAmount (uppercase) first
+		if deliveredAmount := meta["DeliveredAmount"]; deliveredAmount != nil {
+			extractFromField(deliveredAmount, "meta.DeliveredAmount")
+		}
+		// Check delivered_amount (lowercase)
+		if deliveredAmount := meta["delivered_amount"]; deliveredAmount != nil {
+			extractFromField(deliveredAmount, "meta.delivered_amount")
 		}
 	}
+
+	// NOTE: We do NOT extract tokens from RippleState in AffectedNodes because:
+	// - RippleState entries represent trustlines between accounts
+	// - The issuer in HighLimit/LowLimit is the account that set the limit, NOT the token issuer
+	// - Real token issuers are only in transaction fields: Amount, SendMax, DeliverMin, DeliverMax, LimitAmount, DeliveredAmount
+	// - This matches the logic in consumers/consumers.go detectTokenIssuer function
 
 	// Convert map to slice
-	result := make([]TokenInfo, 0, len(tokens))
+	result := make([]TokenExtractionInfo, 0, len(tokens))
 	for _, token := range tokens {
 		result = append(result, token)
 	}
@@ -180,153 +208,162 @@ func extractTokenFromRippleState(fields map[string]interface{}, addToken func(st
 	}
 }
 
-// CheckAndNotifyNewTokens checks tokens from a ledger and notifies about new ones
-func CheckAndNotifyNewTokens(ctx context.Context, transactions []interface{}, ledgerIndex uint32, ledgerTimestamp time.Time) error {
-	// Collect all unique tokens from all transactions
-	allTokens := make(map[string]TokenInfo)
+var (
+	tokenLogFile     *os.File
+	tokenLogFileMu   sync.Mutex
+	tokenLogFileInit sync.Once
+)
 
-	for idx, txObj := range transactions {
-		tx, ok := txObj.(map[string]interface{})
-		if !ok {
+// initTokenLogFile initializes the token log file
+func initTokenLogFile() error {
+	var err error
+	tokenLogFileInit.Do(func() {
+		logDir := "logs"
+		if err := os.MkdirAll(logDir, 0755); err != nil {
+			return
+		}
+
+		logFile := filepath.Join(logDir, "token-extractions.jsonl")
+		tokenLogFile, err = os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return
+		}
+	})
+	return err
+}
+
+// writeTokenExtraction writes token extraction info to file
+func writeTokenExtraction(ledgerIndex uint32, tokenExtractions []TokenExtractionInfo) {
+	tokenLogFileMu.Lock()
+	defer tokenLogFileMu.Unlock()
+
+	if err := initTokenLogFile(); err != nil {
+		logger.Log.Warn().Err(err).Msg("Failed to initialize token log file")
+		return
+	}
+
+	for _, extraction := range tokenExtractions {
+		entry := map[string]interface{}{
+			"timestamp":       time.Now().UTC().Format(time.RFC3339),
+			"ledger_index":    ledgerIndex,
+			"currency":        extraction.Currency,
+			"issuer":          extraction.Issuer,
+			"in_ledger_index": extraction.InLedgerIndex,
+			"tx_hash":         extraction.TxHash,
+			"tx_type":         extraction.TxType,
+			"source_field":    extraction.SourceField,
+		}
+
+		jsonData, err := json.Marshal(entry)
+		if err != nil {
+			logger.Log.Warn().Err(err).Msg("Failed to marshal token extraction entry")
 			continue
 		}
 
-		// Only process successful transactions
-		if meta, ok := tx["meta"].(map[string]interface{}); ok {
-			if result, ok := meta["TransactionResult"].(string); ok && result != "tesSUCCESS" {
-				continue
+		if _, err := fmt.Fprintln(tokenLogFile, string(jsonData)); err != nil {
+			logger.Log.Warn().Err(err).Msg("Failed to write token extraction to file")
+		}
+	}
+}
+
+// CheckAndNotifyNewTokens checks tokens from payout money_flow records and notifies about new ones
+// moneyFlows - список всех money_flow записей, сформированных в ProcessTransaction
+func CheckAndNotifyNewTokens(ctx context.Context, moneyFlows []MoneyFlowRow, ledgerIndex uint32) error {
+	// Filter only payout flows
+	payoutFlows := make([]MoneyFlowRow, 0)
+	for _, flow := range moneyFlows {
+		if flow.Kind == "payout" {
+			payoutFlows = append(payoutFlows, flow)
+		}
+	}
+
+	if len(payoutFlows) == 0 {
+		logger.Log.Debug().
+			Uint32("ledger_index", ledgerIndex).
+			Msg("No payout money_flow records found")
+		return nil
+	}
+
+	logger.Log.Info().
+		Uint32("ledger_index", ledgerIndex).
+		Int("payout_flows_count", len(payoutFlows)).
+		Msg("Found payout money_flow records, extracting tokens")
+
+	// Collect all unique tokens from payout flows
+	allTokens := make(map[string]TokenInfo)
+	tokenToFlow := make(map[string]MoneyFlowRow) // key: currency|issuer -> flow info
+
+	for _, flow := range payoutFlows {
+		// Extract tokens from from_currency/from_issuer
+		if flow.FromCurrency != "" && flow.FromCurrency != "XRP" && flow.FromIssuerAddress != "" && flow.FromIssuerAddress != "XRP" {
+			key := flow.FromCurrency + "|" + flow.FromIssuerAddress
+			if existing, exists := allTokens[key]; !exists || flow.InLedgerIndex < existing.InLedgerIndex {
+				allTokens[key] = TokenInfo{
+					Currency:      flow.FromCurrency,
+					Issuer:        flow.FromIssuerAddress,
+					InLedgerIndex: flow.InLedgerIndex,
+				}
+				tokenToFlow[key] = flow
 			}
 		}
 
-		// Extract inLedgerIndex from transaction meta, fallback to array index
-		var inLedgerIndex uint32 = uint32(idx) // Default to array index
-		foundInMeta := false
-
-		// First, try to get from meta.TransactionIndex
-		if meta, ok := tx["meta"].(map[string]interface{}); ok {
-			// Try TransactionIndex (float64) - most common format
-			if ti, ok := meta["TransactionIndex"].(float64); ok {
-				inLedgerIndex = uint32(ti)
-				foundInMeta = true
-			} else if ti, ok := meta["TransactionIndex"].(int); ok {
-				// Try TransactionIndex (int)
-				inLedgerIndex = uint32(ti)
-				foundInMeta = true
-			} else if ti, ok := meta["TransactionIndex"].(uint32); ok {
-				// Try TransactionIndex (uint32)
-				inLedgerIndex = ti
-				foundInMeta = true
-			} else if ti, ok := meta["TransactionIndex"].(int64); ok {
-				// Try TransactionIndex (int64)
-				inLedgerIndex = uint32(ti)
-				foundInMeta = true
-			}
-		}
-
-		// If not found in meta, try root level fields (inLedger or TransactionIndex)
-		if !foundInMeta {
-			if inLedger, ok := tx["inLedger"].(float64); ok {
-				inLedgerIndex = uint32(inLedger)
-			} else if inLedger, ok := tx["inLedger"].(uint32); ok {
-				inLedgerIndex = inLedger
-			} else if inLedger, ok := tx["inLedger"].(int); ok {
-				inLedgerIndex = uint32(inLedger)
-			} else if ti, ok := tx["TransactionIndex"].(float64); ok {
-				inLedgerIndex = uint32(ti)
-			} else if ti, ok := tx["TransactionIndex"].(uint32); ok {
-				inLedgerIndex = ti
-			} else if ti, ok := tx["TransactionIndex"].(int); ok {
-				inLedgerIndex = uint32(ti)
-			}
-			// If still not found, inLedgerIndex remains as array index (idx)
-		}
-
-		tokens := ExtractTokensFromTransaction(tx, inLedgerIndex)
-		for _, token := range tokens {
-			key := token.Currency + "|" + token.Issuer
-			// Keep the token with the minimum InLedgerIndex (first occurrence in ledger)
-			if existing, exists := allTokens[key]; !exists || token.InLedgerIndex < existing.InLedgerIndex {
-				allTokens[key] = token
+		// Extract tokens from to_currency/to_issuer
+		if flow.ToCurrency != "" && flow.ToCurrency != "XRP" && flow.ToIssuerAddress != "" && flow.ToIssuerAddress != "XRP" {
+			key := flow.ToCurrency + "|" + flow.ToIssuerAddress
+			if existing, exists := allTokens[key]; !exists || flow.InLedgerIndex < existing.InLedgerIndex {
+				allTokens[key] = TokenInfo{
+					Currency:      flow.ToCurrency,
+					Issuer:        flow.ToIssuerAddress,
+					InLedgerIndex: flow.InLedgerIndex,
+				}
+				tokenToFlow[key] = flow
 			}
 		}
 	}
 
-	// Convert map to slice for batch checking
+	// Convert map to slice
 	tokenSlice := make([]TokenInfo, 0, len(allTokens))
 	for _, token := range allTokens {
 		tokenSlice = append(tokenSlice, token)
 	}
 
-	// Batch check all tokens in ClickHouse (single query instead of N queries)
+	if len(tokenSlice) == 0 {
+		logger.Log.Debug().
+			Uint32("ledger_index", ledgerIndex).
+			Msg("No valid tokens extracted from payout flows")
+		return nil
+	}
+
+	logger.Log.Info().
+		Uint32("ledger_index", ledgerIndex).
+		Int("tokens_to_check", len(tokenSlice)).
+		Msg("Checking tokens in known_tokens table")
+
+	// Check which tokens exist in known_tokens table
 	knownMap, err := AreTokensKnownBatch(ctx, tokenSlice)
 	if err != nil {
 		logger.Log.Warn().
 			Err(err).
-			Msg("Error batch checking tokens in ClickHouse, falling back to individual checks")
-		// Fallback to individual checks
-		knownMap = make(map[string]bool)
-		for _, token := range tokenSlice {
-			key := token.Currency + "|" + token.Issuer
-			known, err := IsTokenKnown(ctx, token.Currency, token.Issuer)
-			if err == nil {
-				knownMap[key] = known
-			}
-		}
+			Msg("Error checking tokens in known_tokens, skipping token detection")
+		return err
 	}
 
-	// Check each token
-	newTokens := make([]TokenInfo, 0)
-	tokensToAddToKnown := make([]TokenInfo, 0)
-
+	// Process only tokens that are NOT in known_tokens (new tokens)
+	newTokensCount := 0
+	existingTokensCount := 0
 	for _, token := range tokenSlice {
 		key := token.Currency + "|" + token.Issuer
-		known := knownMap[key]
-
-		if known {
-			// Token already known, skip
+		if knownMap[key] {
+			// Token already exists in known_tokens, skip
+			existingTokensCount++
 			continue
 		}
 
-		// Not found in ClickHouse, check via XRPL API
-		// Note: XRPL API doesn't support batch requests, so we check individually
-		// but we could parallelize this if needed
-		hasHistory, err := CheckTokenViaXRPLAPI(ctx, token.Currency, token.Issuer)
-		if err != nil {
-			logger.Log.Warn().
-				Err(err).
-				Str("currency", token.Currency).
-				Str("issuer", token.Issuer).
-				Msg("Error checking token via XRPL API, assuming new token")
-			// On error, assume it's a new token
-			newTokens = append(newTokens, token)
-			continue
-		}
+		// Token is new - add to new_tokens table
+		newTokensCount++
 
-		if !hasHistory {
-			// New token found!
-			newTokens = append(newTokens, token)
-		} else {
-			newTokens = append(newTokens, token) //Тут
-			// Token has history but not in our DB, add it to known_tokens
-			tokensToAddToKnown = append(tokensToAddToKnown, token)
-		}
-	}
-
-	// Batch add tokens that have history but weren't in our DB
-	for _, token := range tokensToAddToKnown {
-		err = AddKnownToken(ctx, token.Currency, token.Issuer, ledgerIndex, ledgerTimestamp)
-		if err != nil {
-			logger.Log.Warn().
-				Err(err).
-				Str("currency", token.Currency).
-				Str("issuer", token.Issuer).
-				Msg("Failed to add known token to database")
-		}
-	}
-
-	// Add new tokens to known_tokens and notify
-	for _, token := range newTokens {
-		err := AddKnownToken(ctx, token.Currency, token.Issuer, ledgerIndex, ledgerTimestamp)
+		now := time.Now().UTC()
+		err := AddNewToken(ctx, token.Currency, token.Issuer, ledgerIndex, token.InLedgerIndex, now)
 		if err != nil {
 			logger.Log.Error().
 				Err(err).
@@ -336,24 +373,43 @@ func CheckAndNotifyNewTokens(ctx context.Context, transactions []interface{}, le
 			continue
 		}
 
-		err = AddNewToken(ctx, token.Currency, token.Issuer, ledgerIndex, token.InLedgerIndex)
-		if err != nil {
-			logger.Log.Error().
-				Err(err).
-				Str("currency", token.Currency).
-				Str("issuer", token.Issuer).
-				Msg("Failed to add new token to database")
-			continue
+		// Get flow info for logging tx_hash
+		flow, hasFlow := tokenToFlow[key]
+		txHash := ""
+		if hasFlow {
+			txHash = flow.TxHash
 		}
 
-		// Notify via SocketIO
-		socketio.GetHub().EmitNewTokenDetected(socketio.NewTokenDetectedEvent{
+		// Log new token detection
+		logEntry := logger.Log.Info().
+			Str("currency", token.Currency).
+			Str("issuer", token.Issuer).
+			Uint32("ledger_index", ledgerIndex).
+			Uint32("in_ledger_index", token.InLedgerIndex)
+
+		if txHash != "" {
+			logEntry = logEntry.Str("tx_hash", txHash)
+		}
+
+		logEntry.Msg("New token detected and added to new_tokens")
+
+		// Emit SocketIO notification
+		hub := socketio.GetHub()
+		event := socketio.NewTokenDetectedEvent{
 			Currency:    token.Currency,
 			Issuer:      token.Issuer,
 			LedgerIndex: ledgerIndex,
-			Timestamp:   time.Now().Unix(),
-		})
+			Timestamp:   now.Unix(),
+		}
+		hub.EmitNewTokenDetected(event)
 	}
+
+	logger.Log.Info().
+		Uint32("ledger_index", ledgerIndex).
+		Int("total_checked", len(tokenSlice)).
+		Int("new_tokens", newTokensCount).
+		Int("existing_tokens", existingTokensCount).
+		Msg("Finished processing tokens for ledger")
 
 	return nil
 }

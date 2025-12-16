@@ -135,6 +135,7 @@ docker-compose up -d clickhouse
 go build -o .\bin\platform-server.exe .
 go build -o .\bin\platform-cli.exe .\cmd\cli
 go build -o .\bin\platform-orchestrator.exe .\cmd\orchestrator
+go build -o .\bin\indexer-orchestrator.exe .\cmd\indexer-orchestrator
 ```
 
 #### Linux
@@ -143,6 +144,7 @@ go build -o .\bin\platform-orchestrator.exe .\cmd\orchestrator
 go build -o ./bin/platform-server ./
 go build -o ./bin/platform-cli ./cmd/cli
 go build -o ./bin/platform-orchestrator ./cmd/orchestrator
+go build -o ./bin/indexer-orchestrator ./cmd/indexer-orchestrator
 ```
 
 Или используйте Makefile:
@@ -178,6 +180,17 @@ make build
 ./run.sh
 ```
 
+Бэкфилинг токенов
+
+```bash
+./bin/platform-cli import-xrplmeta-tokens
+```
+
+Запуск оркестратора индексации в релаьном времени
+
+```bash
+./bin/indexer-orchestrator --server-path ./bin/platform-server --config .env
+```
 ## ⚙️ Конфигурация
 
 Все настройки конфигурируются через переменные окружения в файле `.env`.

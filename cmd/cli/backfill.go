@@ -490,7 +490,7 @@ func (cmd *BackfillCommand) backfillTransactions(ledgerJSON []byte) error {
 		}
 
 		// Process transaction directly and write to ClickHouse
-		rowsWritten, err := consumers.ProcessTransaction(tx)
+		rowsWritten, _, err := consumers.ProcessTransaction(tx)
 		if err != nil {
 			errorCount++
 			logger.Log.Error().

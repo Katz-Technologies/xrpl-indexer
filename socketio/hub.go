@@ -66,6 +66,20 @@ func generateSID() string {
 func (h *Hub) HandleSocketIO(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Headers", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+
+	// Handle OPTIONS preflight requests
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	logger.Log.Debug().
+		Str("method", r.Method).
+		Str("path", r.URL.Path).
+		Str("query", r.URL.RawQuery).
+		Str("remote_addr", r.RemoteAddr).
+		Msg("Socket.IO request received")
 
 	EIO := r.URL.Query().Get("EIO")
 	transport := r.URL.Query().Get("transport")
@@ -207,7 +221,7 @@ func (h *Hub) EmitNewTokenDetected(event NewTokenDetectedEvent) {
 	h.mu.RUnlock()
 
 	if len(clients) == 0 {
-		logger.Log.Warn().Msg("EmitNewTokenDetected: no clients connected")
+		logger.Log.Debug().Msg("EmitNewTokenDetected: no clients connected")
 		return
 	}
 
