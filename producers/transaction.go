@@ -67,75 +67,105 @@ func ProcessTransactionsDirectly(message []byte, isRealtime bool) {
 		return
 	}
 
-	// Convert closeTime to time.Time for token checking
-	const rippleToUnix int64 = 946684800
-	ledgerTimestamp := time.Unix(int64(closeTime)+rippleToUnix, 0).UTC()
+	// Token detection is now handled in ProcessTransaction via money_flow records
+	// No need to check tokens here anymore
 
-	// Check for new tokens (only for real-time ledgers to avoid API spam during backfill)
-	// This runs asynchronously in a separate goroutine to not block transaction processing
-	if isRealtime {
-		// Use background context with longer timeout for token checking
-		// This allows retries to complete even if they take longer
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	// Check if we're in subprocess mode (IPC mode)
+	ipcProtocol := GetIPCProtocol()
+	if ipcProtocol != nil {
+		// Subprocess mode: send transactions via IPC to orchestrator
+		logger.Log.Debug().
+			Uint32("ledger_index", ledger.LedgerIndex).
+			Int("total_txs", len(txs)).
+			Msg("Processing ledger in IPC mode")
 
-		// Prepare transactions for token checking (need to populate ledger_index and date first)
-		// IMPORTANT: Copy transactions before passing to goroutine to avoid concurrent map access
-		preparedTxs := make([]interface{}, 0, len(txs))
+		preparedTxs := make([]map[string]interface{}, 0, len(txs))
 		for _, txo := range txs {
 			tx, ok := txo.(map[string]interface{})
 			if !ok {
+				logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Msg("Error asserting transaction type")
 				continue
 			}
-			// Populate required fields
+
+			// Transactions fetched by `ledger` command do not have date, validated,
+			// ledger_index fields. Populating these tx fields from ledger data.
+			// Use float64 for ledger_index to match XRPL format
 			tx["ledger_index"] = float64(ledgerIndex)
 			tx["date"] = closeTime
 			tx["validated"] = true
+
+			var base xrpl.BaseResponse = tx
+			hash, _ := base["hash"].(string)
+			if hash == "" {
+				// Skip malformed tx
+				continue
+			}
+
 			preparedTxs = append(preparedTxs, tx)
 		}
 
-		// Deep copy transactions before passing to goroutine to avoid concurrent map access
-		copiedTxs := connections.DeepCopyTransactions(preparedTxs)
+		// Send batch via IPC
+		if len(preparedTxs) > 0 {
+			if sent := SendBatchTransactionsViaIPC(preparedTxs); sent {
+				logger.Log.Debug().
+					Uint32("ledger_index", ledger.LedgerIndex).
+					Int("txs_sent", len(preparedTxs)).
+					Msg("Sent transactions batch via IPC")
+			} else {
+				logger.Log.Error().
+					Uint32("ledger_index", ledger.LedgerIndex).
+					Int("txs_count", len(preparedTxs)).
+					Msg("Failed to send transactions batch via IPC")
+			}
+		} else {
+			logger.Log.Debug().
+				Uint32("ledger_index", ledger.LedgerIndex).
+				Msg("No transactions to send via IPC")
+		}
+	} else {
+		// Standalone mode: process transactions directly and write to ClickHouse
+		allMoneyFlows := make([]connections.MoneyFlowRow, 0)
+		for _, txo := range txs {
+			tx, ok := txo.(map[string]interface{})
+			if !ok {
+				logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Msg("Error asserting transaction type")
+				continue
+			}
 
-		// Check for new tokens asynchronously to not block transaction processing
-		// This goroutine runs independently and won't block the main indexing flow
-		go func() {
-			defer cancel() // Ensure context is cancelled when done
-			if err := connections.CheckAndNotifyNewTokens(ctx, copiedTxs, ledger.LedgerIndex, ledgerTimestamp); err != nil {
+			// Transactions fetched by `ledger` command do not have date, validated,
+			// ledger_index fields. Populating these tx fields from ledger data.
+			// Use float64 for ledger_index to match XRPL format
+			tx["ledger_index"] = float64(ledgerIndex)
+			tx["date"] = closeTime
+			tx["validated"] = true
+
+			var base xrpl.BaseResponse = tx
+			hash, _ := base["hash"].(string)
+			if hash == "" {
+				// Skip malformed tx
+				continue
+			}
+
+			// Process transaction directly and write to ClickHouse
+			_, moneyFlows, err := consumers.ProcessTransaction(tx)
+			if err != nil {
+				logger.Log.Error().Err(err).Str("tx_hash", hash).Uint32("ledger_index", ledger.LedgerIndex).Msg("Failed to process transaction")
+				// Continue processing other transactions even if one fails
+			} else {
+				allMoneyFlows = append(allMoneyFlows, moneyFlows...)
+			}
+		}
+
+		// Check for new tokens from all payout money flows
+		if len(allMoneyFlows) > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := connections.CheckAndNotifyNewTokens(ctx, allMoneyFlows, ledger.LedgerIndex); err != nil {
 				logger.Log.Warn().
 					Err(err).
 					Uint32("ledger_index", ledger.LedgerIndex).
-					Msg("Error checking for new tokens (non-blocking)")
+					Msg("Error checking for new tokens")
 			}
-		}()
-	}
-
-	// Process transactions directly and write to ClickHouse
-	for _, txo := range txs {
-		tx, ok := txo.(map[string]interface{})
-		if !ok {
-			logger.Log.Error().Uint32("ledger_index", ledger.LedgerIndex).Msg("Error asserting transaction type")
-			continue
-		}
-
-		// Transactions fetched by `ledger` command do not have date, validated,
-		// ledger_index fields. Populating these tx fields from ledger data.
-		// Use float64 for ledger_index to match XRPL format
-		tx["ledger_index"] = float64(ledgerIndex)
-		tx["date"] = closeTime
-		tx["validated"] = true
-
-		var base xrpl.BaseResponse = tx
-		hash, _ := base["hash"].(string)
-		if hash == "" {
-			// Skip malformed tx
-			continue
-		}
-
-		// Process transaction directly and write to ClickHouse
-		_, err := consumers.ProcessTransaction(tx)
-		if err != nil {
-			logger.Log.Error().Err(err).Str("tx_hash", hash).Uint32("ledger_index", ledger.LedgerIndex).Msg("Failed to process transaction")
-			// Continue processing other transactions even if one fails
 		}
 	}
 }

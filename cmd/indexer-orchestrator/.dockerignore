@@ -1,0 +1,41 @@
+# Logs
+logs/
+*.log
+
+# Binaries (will be built in Docker)
+bin/
+*.exe
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+examples/
+test_tools/
+test_tools_2/
+
+# Documentation
+*.md
+LICENSE
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Temporary files
+*.tmp
+*.bak
+

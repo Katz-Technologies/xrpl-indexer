@@ -41,6 +41,10 @@ type MoneyFlowRow struct {
 	Version           uint64
 }
 
+// BatchFlushCallback is called after a successful batch flush
+// It receives the batch of rows that were flushed
+type BatchFlushCallback func(batch []MoneyFlowRow)
+
 // ClickHouseBatchWriter handles batched writes to ClickHouse
 type ClickHouseBatchWriter struct {
 	conn           driver.Conn
@@ -53,6 +57,7 @@ type ClickHouseBatchWriter struct {
 	wg             sync.WaitGroup
 	stopped        bool
 	stopOnce       sync.Once
+	flushCallback  BatchFlushCallback // Optional callback after successful flush
 }
 
 // NewClickHouseConnection initializes ClickHouse connection
@@ -101,8 +106,18 @@ func NewClickHouseConnection() {
 		// Initialize batch writer
 		batchSize := config.EnvClickHouseBatchSize()
 		batchTimeoutMs := config.EnvClickHouseBatchTimeoutMs()
-		chBatchWriter = NewClickHouseBatchWriter(conn, batchSize, time.Duration(batchTimeoutMs)*time.Millisecond)
+		batchTimeout := time.Duration(batchTimeoutMs) * time.Millisecond
+		logger.Log.Info().
+			Int("batch_size", batchSize).
+			Int("batch_timeout_ms", batchTimeoutMs).
+			Dur("batch_timeout", batchTimeout).
+			Msg("Initializing ClickHouse batch writer")
+		chBatchWriter = NewClickHouseBatchWriter(conn, batchSize, batchTimeout)
 		chBatchWriter.Start()
+		logger.Log.Info().
+			Int("batch_size", batchSize).
+			Int("batch_timeout_ms", batchTimeoutMs).
+			Msg("ClickHouse batch writer started - will accumulate money flow rows until batch size is reached")
 	})
 }
 
@@ -117,6 +132,21 @@ func NewClickHouseBatchWriter(conn driver.Conn, batchSize int, batchTimeout time
 	}
 }
 
+// SetFlushCallback sets a callback function that will be called after each successful batch flush
+func (w *ClickHouseBatchWriter) SetFlushCallback(callback BatchFlushCallback) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.flushCallback = callback
+}
+
+// SetBatchFlushCallback sets a callback function for the global batch writer
+// This callback will be called after each successful batch flush
+func SetBatchFlushCallback(callback BatchFlushCallback) {
+	if chBatchWriter != nil {
+		chBatchWriter.SetFlushCallback(callback)
+	}
+}
+
 // Start starts the batch writer with periodic flushing
 func (w *ClickHouseBatchWriter) Start() {
 	// Start periodic flush ticker
@@ -127,7 +157,31 @@ func (w *ClickHouseBatchWriter) Start() {
 		for {
 			select {
 			case <-w.flushTicker.C:
-				w.Flush()
+				// Check batch size before flushing by timeout
+				// Only flush if batch has accumulated a reasonable amount (at least 10% of target size)
+				// This prevents flushing tiny batches while waiting for more data
+				w.mu.Lock()
+				batchSize := len(w.moneyFlowBatch)
+				minFlushSize := w.batchSize / 10 // Flush only if at least 10% of target size
+				if minFlushSize < 10 {
+					minFlushSize = 10 // Minimum 10 rows
+				}
+				w.mu.Unlock()
+				if batchSize >= minFlushSize {
+					logger.Log.Debug().
+						Int("batch_size", batchSize).
+						Int("target_batch_size", w.batchSize).
+						Int("min_flush_size", minFlushSize).
+						Dur("timeout", w.batchTimeout).
+						Msg("Flushing batch due to timeout")
+					w.Flush()
+				} else if batchSize > 0 {
+					logger.Log.Trace().
+						Int("batch_size", batchSize).
+						Int("target_batch_size", w.batchSize).
+						Int("min_flush_size", minFlushSize).
+						Msg("Skipping timeout flush - batch too small, waiting for more data")
+				}
 			case <-w.stopChan:
 				return
 			}
@@ -168,7 +222,10 @@ func (w *ClickHouseBatchWriter) WriteMoneyFlow(row MoneyFlowRow) error {
 
 	// Flush if batch is full
 	if currentBatchSize >= w.batchSize {
-		logger.Log.Debug().Int("batch_size", currentBatchSize).Msg("Batch is full, flushing to ClickHouse")
+		logger.Log.Info().
+			Int("batch_size", currentBatchSize).
+			Int("target_batch_size", w.batchSize).
+			Msg("Batch reached target size, flushing to ClickHouse")
 		return w.flushUnlocked()
 	}
 
@@ -339,6 +396,17 @@ func (w *ClickHouseBatchWriter) flushUnlocked() error {
 		Int("batch_size", len(batch)).
 		Interface("ledgers", ledgerSummary).
 		Msg("Successfully flushed batch to ClickHouse")
+
+	// Call flush callback if set (e.g., for token detection)
+	// Run in goroutine to not block the flush operation
+	if w.flushCallback != nil {
+		go func() {
+			// Make a copy of the batch to avoid race conditions
+			batchCopy := make([]MoneyFlowRow, len(batch))
+			copy(batchCopy, batch)
+			w.flushCallback(batchCopy)
+		}()
+	}
 
 	// Check for subscription activities after successful flush
 	// Run in goroutine to not block the flush operation

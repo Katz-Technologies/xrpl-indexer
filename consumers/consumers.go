@@ -932,7 +932,7 @@ func isWithinRange(val decimal.Decimal) bool {
 	return true
 }
 
-func ProcessTransaction(tx map[string]interface{}) (int, error) {
+func ProcessTransaction(tx map[string]interface{}) (int, []connections.MoneyFlowRow, error) {
 	var hash string
 	if h, ok := tx["hash"].(string); ok {
 		hash = h
@@ -942,17 +942,17 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 	if tt, ok := tx["TransactionType"].(string); ok {
 		if tt != "Payment" {
 			// Only log if detailed logging is enabled (will check ledger_index later)
-			return 0, nil // Skip non-Payment transactions
+			return 0, nil, nil // Skip non-Payment transactions
 		}
 	} else {
 		// Only log if detailed logging is enabled (will check ledger_index later)
-		return 0, nil // Skip transactions without type
+		return 0, nil, nil // Skip transactions without type
 	}
 
 	modified, err := indexer.ModifyTransaction(tx)
 	if err != nil {
 		logger.Log.Error().Err(err).Msg("Error fixing transaction object")
-		return 0, err
+		return 0, nil, err
 	}
 
 	var base map[string]interface{} = modified
@@ -975,7 +975,7 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 			Str("tx_hash", hash).
 			Interface("ledger_index_type", base["ledger_index"]).
 			Msg("Failed to extract ledger_index from transaction")
-		return 0, fmt.Errorf("failed to extract ledger_index from transaction")
+		return 0, nil, fmt.Errorf("failed to extract ledger_index from transaction")
 	}
 
 	closeTime, _ := base["date"].(float64)
@@ -997,7 +997,7 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 						Str("transaction_result", r).
 						Msg("Skipping failed transaction")
 				}
-				return 0, nil // Skip failed transactions
+				return 0, nil, nil // Skip failed transactions
 			}
 		} else {
 			// TransactionResult is missing in meta - this is unusual but we'll skip it to be safe
@@ -1007,7 +1007,7 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 					Uint32("ledger_index", uint32(ledgerIndex)).
 					Msg("Skipping transaction without TransactionResult in meta")
 			}
-			return 0, nil // Skip transactions without TransactionResult
+			return 0, nil, nil // Skip transactions without TransactionResult
 		}
 		if ti, ok := meta["TransactionIndex"].(float64); ok {
 			inLedgerIndex = ti
@@ -1021,7 +1021,7 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 				Uint32("ledger_index", uint32(ledgerIndex)).
 				Msg("Skipping transaction without meta")
 		}
-		return 0, nil // Skip transactions without meta
+		return 0, nil, nil // Skip transactions without meta
 	}
 
 	// Only log detailed info if enabled for this ledger
@@ -1069,6 +1069,8 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 	}
 
 	rowsWritten := 0
+	moneyFlows := make([]connections.MoneyFlowRow, 0) // Collect all money flows for token detection
+
 	for _, action := range actions {
 		if len(action.Sides) == 0 {
 			continue
@@ -1177,6 +1179,18 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 			Version:           generateVersion(),
 		}
 
+		// Collect money flow for token detection
+		moneyFlows = append(moneyFlows, connections.MoneyFlowRow{
+			TxHash:            row.TxHash,
+			LedgerIndex:       row.LedgerIndex,
+			InLedgerIndex:     row.InLedgerIndex,
+			FromCurrency:      row.FromCurrency,
+			FromIssuerAddress: row.FromIssuerAddress,
+			ToCurrency:        row.ToCurrency,
+			ToIssuerAddress:   row.ToIssuerAddress,
+			Kind:              row.Kind,
+		})
+
 		// Write directly to ClickHouse
 		if err := connections.WriteMoneyFlowRow(
 			row.TxHash,
@@ -1204,7 +1218,7 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 				Uint32("ledger_index", row.LedgerIndex).
 				Str("kind", row.Kind).
 				Msg("Failed to write money flow row to ClickHouse")
-			return 0, err
+			return 0, nil, err
 		}
 		rowsWritten++
 	}
@@ -1226,7 +1240,7 @@ func ProcessTransaction(tx map[string]interface{}) (int, error) {
 		}
 	}
 
-	return rowsWritten, nil
+	return rowsWritten, moneyFlows, nil
 }
 
 // WaitForConsumersToFinish waits for all consumer messages to be processed

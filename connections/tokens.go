@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -10,6 +11,15 @@ import (
 	"github.com/xrpscan/xrpl-go"
 )
 
+// RateLimitError represents a rate limit error from XRPL API
+type RateLimitError struct {
+	ErrorCode string
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("XRPL API rate limit (slowDown): %s", e.ErrorCode)
+}
+
 // TokenInfo represents a token (currency + issuer)
 type TokenInfo struct {
 	Currency      string
@@ -17,221 +27,170 @@ type TokenInfo struct {
 	InLedgerIndex uint32 // Index of the transaction within the ledger where this token was found
 }
 
-// IsTokenKnown checks if a token exists in the known_tokens table or in money_flow
-// This is a single-token check function (kept for backward compatibility)
-func IsTokenKnown(ctx context.Context, currency, issuer string) (bool, error) {
-	if ClickHouseConn == nil {
-		return false, fmt.Errorf("ClickHouse connection not initialized")
-	}
-
-	// Skip XRP
-	if currency == "XRP" || currency == "" {
-		return true, nil
-	}
-
-	// Escape single quotes for SQL safety
-	currencyEscaped := strings.ReplaceAll(currency, "'", "''")
-	issuerEscaped := strings.ReplaceAll(issuer, "'", "''")
-
-	// First check in known_tokens table
-	query := fmt.Sprintf(`
-		SELECT 1 
-		FROM xrpl.known_tokens 
-		WHERE currency = '%s' AND issuer = '%s'
-		LIMIT 1
-	`, currencyEscaped, issuerEscaped)
-
-	var result int
-	err := ClickHouseConn.QueryRow(ctx, query).Scan(&result)
-	if err == nil {
-		// Found in known_tokens
-		return true, nil
-	}
-
-	// If not found in known_tokens, check in money_flow
-	query2 := fmt.Sprintf(`
-		SELECT 1 
-		FROM xrpl.money_flow 
-		WHERE (from_currency = '%s' AND from_issuer_address = '%s')
-		   OR (to_currency = '%s' AND to_issuer_address = '%s')
-		LIMIT 1
-	`, currencyEscaped, issuerEscaped, currencyEscaped, issuerEscaped)
-
-	err = ClickHouseConn.QueryRow(ctx, query2).Scan(&result)
-	if err == nil {
-		// Found in money_flow - token exists
-		return true, nil
-	}
-
-	// Not found anywhere
-	return false, nil
-}
-
-// AreTokensKnownBatch checks multiple tokens at once in a single query
+// AreTokensKnownBatch checks if tokens exist in known_tokens table
 // Returns a map of token key (currency|issuer) to whether it's known
 func AreTokensKnownBatch(ctx context.Context, tokens []TokenInfo) (map[string]bool, error) {
+
 	if ClickHouseConn == nil {
 		return nil, fmt.Errorf("ClickHouse connection not initialized")
 	}
 
 	result := make(map[string]bool)
 
-	// Filter out XRP and empty tokens, build map
+	// Filter out XRP and empty tokens
 	validTokens := make([]TokenInfo, 0)
-	tokenKeys := make(map[string]TokenInfo)
 	for _, token := range tokens {
 		if token.Currency == "XRP" || token.Currency == "" || token.Issuer == "" {
 			key := token.Currency + "|" + token.Issuer
 			result[key] = true // XRP is always "known"
 			continue
 		}
-		key := token.Currency + "|" + token.Issuer
-		tokenKeys[key] = token
 		validTokens = append(validTokens, token)
 	}
 
 	if len(validTokens) == 0 {
+		logger.Log.Debug().Msg("No valid tokens to check in known_tokens")
 		return result, nil
 	}
 
-	// Build WHERE clause for batch check in known_tokens
-	var knownTokensConditions []string
-	for _, token := range validTokens {
-		currencyEscaped := strings.ReplaceAll(token.Currency, "'", "''")
-		issuerEscaped := strings.ReplaceAll(token.Issuer, "'", "''")
-		knownTokensConditions = append(knownTokensConditions,
-			fmt.Sprintf("(currency = '%s' AND issuer = '%s')", currencyEscaped, issuerEscaped))
+	logger.Log.Info().
+		Int("total_tokens", len(tokens)).
+		Int("valid_tokens", len(validTokens)).
+		Msg("Checking tokens in known_tokens table")
+
+	// Log sample tokens being checked (first 5)
+	sampleCount := 5
+	if len(validTokens) < sampleCount {
+		sampleCount = len(validTokens)
+	}
+	for i := 0; i < sampleCount; i++ {
+		logger.Log.Debug().
+			Str("currency", validTokens[i].Currency).
+			Str("issuer", validTokens[i].Issuer).
+			Msg("Checking token in known_tokens")
+	}
+	if len(validTokens) > sampleCount {
+		logger.Log.Debug().
+			Int("remaining", len(validTokens)-sampleCount).
+			Msg("... and more tokens to check")
 	}
 
-	// Check in known_tokens table (batch query)
-	query := fmt.Sprintf(`
-		SELECT currency, issuer
-		FROM xrpl.known_tokens 
-		WHERE %s
-	`, strings.Join(knownTokensConditions, " OR "))
+	// Process in batches to avoid query size limits
+	batchSize := 500
+	foundCount := 0
+	for i := 0; i < len(validTokens); i += batchSize {
+		end := i + batchSize
+		if end > len(validTokens) {
+			end = len(validTokens)
+		}
 
-	rows, err := ClickHouseConn.Query(ctx, query)
-	if err == nil {
-		defer rows.Close()
+		batch := validTokens[i:end]
+
+		// Build WHERE clause for batch check in known_tokens
+		var conditions []string
+		for _, token := range batch {
+			currencyEscaped := strings.ReplaceAll(token.Currency, "'", "''")
+			issuerEscaped := strings.ReplaceAll(token.Issuer, "'", "''")
+			conditions = append(conditions,
+				fmt.Sprintf("(currency = '%s' AND issuer = '%s')", currencyEscaped, issuerEscaped))
+		}
+
+		// Check in known_tokens table (batch query)
+		query := fmt.Sprintf(`
+			SELECT currency, issuer
+			FROM xrpl.known_tokens 
+			WHERE %s
+		`, strings.Join(conditions, " OR "))
+
+		logger.Log.Debug().Str("query", query).Msg("Executing query to check tokens in known_tokens")
+
+		rows, err := ClickHouseConn.Query(ctx, query)
+		if err != nil {
+			logger.Log.Warn().
+				Err(err).
+				Int("batch_start", i+1).
+				Int("batch_end", end).
+				Msg("Error querying known_tokens batch")
+			continue
+		}
+
+		batchFound := 0
 		for rows.Next() {
 			var currency, issuer string
 			if err := rows.Scan(&currency, &issuer); err == nil {
 				key := currency + "|" + issuer
 				result[key] = true
+				batchFound++
+				foundCount++
 			}
 		}
-	}
+		rows.Close()
 
-	// For tokens not found in known_tokens, check in money_flow
-	// Build list of tokens that still need checking
-	tokensToCheck := make([]TokenInfo, 0)
-	for _, token := range validTokens {
-		key := token.Currency + "|" + token.Issuer
-		if !result[key] {
-			tokensToCheck = append(tokensToCheck, token)
-		}
-	}
-
-	if len(tokensToCheck) > 0 {
-		// Build WHERE clause for batch check in money_flow
-		var moneyFlowConditions []string
-		for _, token := range tokensToCheck {
-			currencyEscaped := strings.ReplaceAll(token.Currency, "'", "''")
-			issuerEscaped := strings.ReplaceAll(token.Issuer, "'", "''")
-			moneyFlowConditions = append(moneyFlowConditions,
-				fmt.Sprintf("((from_currency = '%s' AND from_issuer_address = '%s') OR (to_currency = '%s' AND to_issuer_address = '%s'))",
-					currencyEscaped, issuerEscaped, currencyEscaped, issuerEscaped))
-		}
-
-		// Query money_flow - need to check both from and to sides, exclude XRP
-		query2 := fmt.Sprintf(`
-			SELECT DISTINCT from_currency as currency, from_issuer_address as issuer
-			FROM xrpl.money_flow 
-			WHERE %s AND from_currency != 'XRP'
-			UNION DISTINCT
-			SELECT DISTINCT to_currency as currency, to_issuer_address as issuer
-			FROM xrpl.money_flow 
-			WHERE %s AND to_currency != 'XRP'
-		`, strings.Join(moneyFlowConditions, " OR "), strings.Join(moneyFlowConditions, " OR "))
-
-		rows2, err := ClickHouseConn.Query(ctx, query2)
-		if err == nil {
-			defer rows2.Close()
-			for rows2.Next() {
-				var currency, issuer string
-				if err := rows2.Scan(&currency, &issuer); err == nil {
-					key := currency + "|" + issuer
-					result[key] = true
-				}
-			}
-		}
+		logger.Log.Debug().
+			Int("batch_start", i+1).
+			Int("batch_end", end).
+			Int("batch_size", len(batch)).
+			Int("found_in_batch", batchFound).
+			Msg("Checked token batch in known_tokens")
 	}
 
 	// Initialize all tokens in result map (set to false if not found)
-	for key := range tokenKeys {
+	notFoundCount := 0
+	for _, token := range validTokens {
+		key := token.Currency + "|" + token.Issuer
 		if _, exists := result[key]; !exists {
 			result[key] = false
+			notFoundCount++
 		}
 	}
+
+	logger.Log.Info().
+		Int("total_checked", len(validTokens)).
+		Int("found_in_db", foundCount).
+		Int("not_found", notFoundCount).
+		Msg("Finished checking tokens in known_tokens")
 
 	return result, nil
 }
 
-// AddKnownToken adds a token to the known_tokens table
-func AddKnownToken(ctx context.Context, currency, issuer string, ledgerIndex uint32, timestamp time.Time) error {
+// AddNewToken adds a new token to both new_tokens and known_tokens tables
+func AddNewToken(ctx context.Context, currency, issuer string, ledgerIndex uint32, inLedgerIndex uint32, timestamp time.Time) error {
 	if ClickHouseConn == nil {
 		return fmt.Errorf("ClickHouse connection not initialized")
 	}
 
-	// Escape single quotes for SQL safety
+	// Format timestamp for ClickHouse DateTime64(3, 'UTC')
+	timestampStr := timestamp.UTC().Format("2006-01-02 15:04:05.000")
+
+	// Escape single quotes in currency and issuer to prevent SQL injection
 	currencyEscaped := strings.ReplaceAll(currency, "'", "''")
 	issuerEscaped := strings.ReplaceAll(issuer, "'", "''")
 
-	now := time.Now().UTC()
-	version := uint64(now.Unix())
+	// Version for ReplacingMergeTree (use Unix timestamp)
+	version := uint64(timestamp.UTC().Unix())
 
-	// Format timestamps for ClickHouse DateTime64(3, 'UTC')
-	// ClickHouse accepts 'YYYY-MM-DD HH:MM:SS.mmm' format
-	timestampStr := timestamp.Format("2006-01-02 15:04:05.000")
-	nowStr := now.Format("2006-01-02 15:04:05.000")
-
-	query := fmt.Sprintf(`
-		INSERT INTO xrpl.known_tokens 
-		(currency, issuer, first_seen_ledger_index, first_seen_timestamp, created_at, version)
-		VALUES ('%s', '%s', %d, toDateTime64('%s', 3, 'UTC'), toDateTime64('%s', 3, 'UTC'), %d)
-	`,
-		currencyEscaped,
-		issuerEscaped,
-		ledgerIndex,
-		timestampStr,
-		nowStr,
-		version,
-	)
-
-	err := ClickHouseConn.Exec(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to insert known token: %w", err)
-	}
-
-	return nil
-}
-
-// AddNewToken adds a new token to the new_tokens table
-func AddNewToken(ctx context.Context, currency, issuer string, ledgerIndex uint32, inLedgerIndex uint32) error {
-	if ClickHouseConn == nil {
-		return fmt.Errorf("ClickHouse connection not initialized")
-	}
-
-	query := fmt.Sprintf(`
+	// Insert into new_tokens table
+	queryNewTokens := fmt.Sprintf(`
 		INSERT INTO xrpl.new_tokens 
-		(currency_code, issuer, first_seen_ledger_index, first_seen_in_ledger_index)
-		VALUES ('%s', '%s', %d, %d)
-	`, currency, issuer, ledgerIndex, inLedgerIndex)
+		(currency_code, issuer, first_seen_ledger_index, first_seen_in_ledger_index, create_timestamp)
+		VALUES ('%s', '%s', %d, %d, toDateTime64('%s', 3, 'UTC'))
+	`, currencyEscaped, issuerEscaped, ledgerIndex, inLedgerIndex, timestampStr)
 
-	err := ClickHouseConn.Exec(ctx, query)
-
+	err := ClickHouseConn.Exec(ctx, queryNewTokens)
 	if err != nil {
-		return fmt.Errorf("failed to insert new token: %w", err)
+		return fmt.Errorf("failed to insert new token into new_tokens: %w", err)
+	}
+
+	// Insert into known_tokens table to prevent duplicates
+	queryKnownTokens := fmt.Sprintf(`
+		INSERT INTO xrpl.known_tokens 
+		(currency, issuer, version)
+		VALUES ('%s', '%s', %d)
+	`, currencyEscaped, issuerEscaped, version)
+
+	err = ClickHouseConn.Exec(ctx, queryKnownTokens)
+	if err != nil {
+		return fmt.Errorf("failed to insert new token into known_tokens: %w", err)
 	}
 
 	return nil
@@ -246,10 +205,11 @@ func CheckTokenViaXRPLAPI(ctx context.Context, currency, issuer string) (bool, e
 	}
 
 	// Request account_tx for the issuer with limit
+	// Reduced to 500 to avoid "too much load on the server" errors
 	request := xrpl.BaseRequest{
 		"command": "account_tx",
 		"account": issuer,
-		"limit":   1000, // Check last 1000 transactions
+		"limit":   200, // Check last 500 transactions (reduced from 1000 to avoid server load)
 	}
 
 	// Retry logic with exponential backoff
@@ -269,10 +229,48 @@ func CheckTokenViaXRPLAPI(ctx context.Context, currency, issuer string) (bool, e
 		response, err := client.Request(request)
 		if err == nil {
 			// Success, process response
-			return processAccountTxResponse(response, currency)
-		}
+			hasHistory, processErr := processAccountTxResponse(response, currency)
+			if processErr == nil {
+				return hasHistory, nil
+			}
 
-		lastErr = err
+			// Check if it's a rate limit error (slowDown)
+			var rateLimitErr *RateLimitError
+			if strings.Contains(processErr.Error(), "slowDown") ||
+				errors.As(processErr, &rateLimitErr) {
+				lastErr = processErr
+				// Use longer delay for rate limiting (2-10 seconds)
+				delay := 2 * time.Second * time.Duration(attempt+1)
+				if delay > 10*time.Second {
+					delay = 10 * time.Second
+				}
+
+				logger.Log.Warn().
+					Err(processErr).
+					Str("currency", currency).
+					Str("issuer", issuer).
+					Int("attempt", attempt+1).
+					Int("max_retries", maxRetries).
+					Dur("retry_in", delay).
+					Msg("XRPL API rate limit (slowDown), retrying with delay")
+
+				select {
+				case <-ctx.Done():
+					return false, fmt.Errorf("context cancelled during rate limit retry: %w", ctx.Err())
+				case <-time.After(delay):
+					// Continue to next retry
+					continue
+				}
+			}
+
+			// Other errors from processing
+			lastErr = processErr
+			if !IsRetryableError(processErr) {
+				return false, fmt.Errorf("non-retryable error: %w", processErr)
+			}
+		} else {
+			lastErr = err
+		}
 
 		// Check if it's a retryable error
 		if !IsRetryableError(err) {
@@ -309,11 +307,55 @@ func CheckTokenViaXRPLAPI(ctx context.Context, currency, issuer string) (bool, e
 	return false, fmt.Errorf("failed after %d retries: %w", maxRetries, lastErr)
 }
 
+// hasTokenInRippleState checks if a RippleState entry contains the specified currency
+func hasTokenInRippleState(fields map[string]interface{}, currency string) bool {
+	highLimit, _ := fields["HighLimit"].(map[string]interface{})
+	lowLimit, _ := fields["LowLimit"].(map[string]interface{})
+
+	if highLimit != nil {
+		if curr, _ := highLimit["currency"].(string); curr == currency {
+			return true
+		}
+	}
+
+	if lowLimit != nil {
+		if curr, _ := lowLimit["currency"].(string); curr == currency {
+			return true
+		}
+	}
+
+	return false
+}
+
 // processAccountTxResponse processes the account_tx API response
 func processAccountTxResponse(response xrpl.BaseResponse, currency string) (bool, error) {
+	// Check if response has error
+	if status, ok := response["status"].(string); ok && status == "error" {
+		if errorMsg, ok := response["error"].(string); ok {
+			// Log full response for debugging
+			logger.Log.Warn().
+				Interface("full_response", response).
+				Str("currency", currency).
+				Str("error", errorMsg).
+				Msg("XRPL API returned error status, logging full response")
+			return false, fmt.Errorf("XRPL API error: %s", errorMsg)
+		}
+		// Log full response even if error message is missing
+		logger.Log.Warn().
+			Interface("full_response", response).
+			Str("currency", currency).
+			Msg("XRPL API returned error status without error message, logging full response")
+		return false, fmt.Errorf("XRPL API error: unknown error")
+	}
+
 	// Check if response has result
 	result, ok := response["result"].(map[string]interface{})
 	if !ok {
+		// Log the actual response for debugging
+		logger.Log.Warn().
+			Interface("full_response", response).
+			Str("currency", currency).
+			Msg("Invalid response format: no result field, logging full response")
 		return false, fmt.Errorf("invalid response format: no result field")
 	}
 
@@ -323,6 +365,24 @@ func processAccountTxResponse(response xrpl.BaseResponse, currency string) (bool
 		if errorCode == "actNotFound" {
 			return false, nil
 		}
+		// slowDown is a rate limit error - should be retried with delay
+		// Log full response for debugging
+		if errorCode == "slowDown" {
+			logger.Log.Warn().
+				Interface("full_response", response).
+				Interface("result", result).
+				Str("currency", currency).
+				Str("error_code", errorCode).
+				Msg("XRPL API returned slowDown error, logging full response")
+			return false, &RateLimitError{ErrorCode: errorCode}
+		}
+		// Log other errors too
+		logger.Log.Warn().
+			Interface("full_response", response).
+			Interface("result", result).
+			Str("currency", currency).
+			Str("error_code", errorCode).
+			Msg("XRPL API returned error, logging full response")
 		return false, fmt.Errorf("XRPL API error: %s", errorCode)
 	}
 
@@ -334,6 +394,7 @@ func processAccountTxResponse(response xrpl.BaseResponse, currency string) (bool
 	}
 
 	// Check if any transaction uses this currency
+	// Use the same extraction logic as ExtractTokensFromTransaction to be consistent
 	for _, txObj := range transactions {
 		tx, ok := txObj.(map[string]interface{})
 		if !ok {
@@ -349,13 +410,41 @@ func processAccountTxResponse(response xrpl.BaseResponse, currency string) (bool
 		// Check Amount field
 		if amount, ok := txData["Amount"].(map[string]interface{}); ok {
 			if curr, _ := amount["currency"].(string); curr == currency {
-				return true, nil // Found transaction with this currency
+				if issuerAddr, _ := amount["issuer"].(string); issuerAddr == "" || issuerAddr == currency {
+					// XRP or invalid, skip
+					continue
+				}
+				// Found transaction with this currency
+				return true, nil
 			}
 		}
 
 		// Check SendMax field
 		if sendMax, ok := txData["SendMax"].(map[string]interface{}); ok {
 			if curr, _ := sendMax["currency"].(string); curr == currency {
+				if issuerAddr, _ := sendMax["issuer"].(string); issuerAddr == "" || issuerAddr == currency {
+					continue
+				}
+				return true, nil
+			}
+		}
+
+		// Check DeliverMin field
+		if deliverMin, ok := txData["DeliverMin"].(map[string]interface{}); ok {
+			if curr, _ := deliverMin["currency"].(string); curr == currency {
+				if issuerAddr, _ := deliverMin["issuer"].(string); issuerAddr == "" || issuerAddr == currency {
+					continue
+				}
+				return true, nil
+			}
+		}
+
+		// Check LimitAmount field (TrustSet)
+		if limitAmount, ok := txData["LimitAmount"].(map[string]interface{}); ok {
+			if curr, _ := limitAmount["currency"].(string); curr == currency {
+				if issuerAddr, _ := limitAmount["issuer"].(string); issuerAddr == "" || issuerAddr == currency {
+					continue
+				}
 				return true, nil
 			}
 		}
@@ -370,6 +459,38 @@ func processAccountTxResponse(response xrpl.BaseResponse, currency string) (bool
 			if deliveredAmount, ok := meta["DeliveredAmount"].(map[string]interface{}); ok {
 				if curr, _ := deliveredAmount["currency"].(string); curr == currency {
 					return true, nil
+				}
+			}
+
+			// Check meta.AffectedNodes for RippleState entries
+			if nodes, ok := meta["AffectedNodes"].([]interface{}); ok {
+				for _, rawNode := range nodes {
+					nodeMap, ok := rawNode.(map[string]interface{})
+					if !ok {
+						continue
+					}
+
+					// Check CreatedNode
+					if createdNode, ok := nodeMap["CreatedNode"].(map[string]interface{}); ok {
+						if ledgerType, _ := createdNode["LedgerEntryType"].(string); ledgerType == "RippleState" {
+							if newFields, ok := createdNode["NewFields"].(map[string]interface{}); ok {
+								if hasTokenInRippleState(newFields, currency) {
+									return true, nil
+								}
+							}
+						}
+					}
+
+					// Check ModifiedNode
+					if modifiedNode, ok := nodeMap["ModifiedNode"].(map[string]interface{}); ok {
+						if ledgerType, _ := modifiedNode["LedgerEntryType"].(string); ledgerType == "RippleState" {
+							if finalFields, ok := modifiedNode["FinalFields"].(map[string]interface{}); ok {
+								if hasTokenInRippleState(finalFields, currency) {
+									return true, nil
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -412,6 +533,13 @@ func IsRetryableError(err error) bool {
 	if strings.Contains(errStrLower, "close 1008") ||
 		strings.Contains(errStrLower, "policy violation") ||
 		strings.Contains(errStrLower, "ip limit reached") {
+		return true
+	}
+
+	// Check for rate limiting errors from XRPL API
+	if strings.Contains(errStrLower, "slowdown") ||
+		strings.Contains(errStrLower, "rate limit") ||
+		strings.Contains(errStrLower, "too many requests") {
 		return true
 	}
 
