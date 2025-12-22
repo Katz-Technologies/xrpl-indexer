@@ -89,11 +89,20 @@ func (o *IndexerOrchestrator) Run(ctx context.Context, cancel context.CancelFunc
 		// Start HTTP server for SocketIO connections
 		go o.startHTTPServer()
 
+		// Check if token_ohlc table is empty and import prices if needed
+		go func() {
+			importCtx := context.Background()
+			if err := connections.ImportAllTokenPrices(importCtx); err != nil {
+				log.Printf("[INDEXER-ORCHESTRATOR] Failed to import token prices: %v", err)
+			}
+		}()
+
 		o.chInitialized = true
 		log.Printf("[INDEXER-ORCHESTRATOR] ClickHouse connection initialized")
 		log.Printf("[INDEXER-ORCHESTRATOR] Batch flush callback set for token detection")
 		log.Printf("[INDEXER-ORCHESTRATOR] XRPL RPC client initialized with URL: %s", orchestratorRPCURL)
 		log.Printf("[INDEXER-ORCHESTRATOR] SocketIO hub initialized")
+		log.Printf("[INDEXER-ORCHESTRATOR] Token price import check started")
 	}
 
 	// Setup signal handlers for graceful shutdown

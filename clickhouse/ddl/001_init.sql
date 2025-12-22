@@ -146,3 +146,29 @@ SETTINGS
 
 ALTER TABLE xrpl.new_tokens ADD INDEX IF NOT EXISTS idx_first_seen_ledger_index (first_seen_ledger_index) TYPE minmax GRANULARITY 4;
 ALTER TABLE xrpl.new_tokens ADD INDEX IF NOT EXISTS idx_first_seen_in_ledger_index (first_seen_in_ledger_index) TYPE minmax GRANULARITY 4;
+
+-- ============================
+-- Token OHLC Prices (цены токенов из Sologenic API)
+-- ============================
+CREATE TABLE IF NOT EXISTS xrpl.token_ohlc
+(
+  timestamp DateTime64(3, 'UTC'),
+  currency String,
+  issuer String,
+  open Decimal(38, 18) CODEC(ZSTD(3)),
+  high Decimal(38, 18) CODEC(ZSTD(3)),
+  low Decimal(38, 18) CODEC(ZSTD(3)),
+  close Decimal(38, 18) CODEC(ZSTD(3)),
+  volume Decimal(38, 18) CODEC(ZSTD(3)),
+  version UInt64 DEFAULT now64()
+)
+ENGINE = ReplacingMergeTree(version)
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (currency, issuer, timestamp)
+SETTINGS
+  index_granularity = 8192,
+  index_granularity_bytes = 10485760;
+
+-- Secondary indexes for token_ohlc
+ALTER TABLE xrpl.token_ohlc ADD INDEX IF NOT EXISTS idx_timestamp (timestamp) TYPE minmax GRANULARITY 4;
+ALTER TABLE xrpl.token_ohlc ADD INDEX IF NOT EXISTS idx_currency_issuer (currency, issuer) TYPE set(0) GRANULARITY 64;
