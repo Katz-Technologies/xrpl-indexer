@@ -219,6 +219,26 @@ func (ledger *LedgerStream) fetchTransactionsWithTimeout(client *xrpl.Client, re
 		return nil, err
 	}
 
+	// Check if response contains an error status from XRPL
+	if response != nil {
+		if status, ok := response["status"].(string); ok && status == "error" {
+			var errorMsg string
+			if errMsg, ok := response["error"].(string); ok {
+				errorMsg = errMsg
+			} else {
+				errorMsg = "unknown error"
+			}
+			requestDuration := time.Since(startTime)
+			logger.Log.Warn().
+				Uint32("ledger_index", ledger.LedgerIndex).
+				Str("request_id", requestId).
+				Str("error", errorMsg).
+				Dur("request_duration", requestDuration).
+				Msg("XRPL API returned error status in response")
+			return nil, fmt.Errorf("XRPL API error: %s", errorMsg)
+		}
+	}
+
 	requestDuration := time.Since(startTime)
 	logger.Log.Debug().
 		Uint32("ledger_index", ledger.LedgerIndex).

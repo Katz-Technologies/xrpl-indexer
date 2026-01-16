@@ -36,7 +36,7 @@ const (
 
 func NewIndexerWorker(id int, serverPath, configFile, serverURL string) (*IndexerWorker, error) {
 	// Create log file for this worker
-	logPath := fmt.Sprintf("logs/indexer-worker-%d.log", id)
+	logPath := fmt.Sprintf("logs/realtime-indexer-worker-%d.log", id)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)

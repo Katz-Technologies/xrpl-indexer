@@ -33,8 +33,47 @@ func NewXrplRPCClientWithURL(URL string) {
 		attempt++
 		logger.Log.Info().Str("url", URL).Int("attempt", attempt).Msg("Attempting to connect XRPL RPC client")
 
+		// Close old client if exists before creating new one
+		if XrplRPCClient != nil {
+			// Close in background to avoid blocking
+			go func() {
+				if err := XrplRPCClient.Close(); err != nil {
+					logger.Log.Debug().Err(err).Msg("Error closing old XRPL RPC client during reconnection")
+				}
+			}()
+		}
+
 		XrplRPCClient = xrpl.NewClient(xrpl.ClientConfig{URL: URL})
-		err := XrplRPCClient.Ping([]byte(URL))
+
+		// Check if client was created successfully
+		if XrplRPCClient == nil {
+			logger.Log.Warn().Str("url", URL).Int("attempt", attempt).Msg("Failed to create XRPL RPC client (nil returned)")
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
+		}
+
+		// Use recover to handle potential panics from Ping() if connection is nil
+		var err error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("panic during ping: %v", r)
+					logger.Log.Error().
+						Interface("panic", r).
+						Str("url", URL).
+						Int("attempt", attempt).
+						Msg("Panic occurred during XRPL RPC client ping - connection may be nil")
+				}
+			}()
+			err = XrplRPCClient.Ping([]byte(URL))
+		}()
+
 		if err == nil {
 			logger.Log.Info().Str("url", URL).Int("attempt", attempt).Msg("Successfully connected XRPL RPC client")
 			return
@@ -72,8 +111,20 @@ func CheckXRPLRPCConnectionHealth() error {
 		return fmt.Errorf("XRPL RPC client is not initialized")
 	}
 
-	// Try a simple ping to check connection health
-	err := XrplRPCClient.Ping([]byte("health_check"))
+	// Use recover to handle potential panics from Ping() if connection is nil
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic during health check ping: %v", r)
+				logger.Log.Error().
+					Interface("panic", r).
+					Msg("Panic occurred during XRPL RPC client health check - connection may be nil")
+			}
+		}()
+		err = XrplRPCClient.Ping([]byte("health_check"))
+	}()
+
 	if err != nil {
 		logger.Log.Warn().Err(err).Msg("XRPL RPC client health check failed")
 		return err
@@ -103,7 +154,36 @@ func ReconnectXRPLRPCClient(URL string) error {
 
 		// Create new connection
 		XrplRPCClient = xrpl.NewClient(xrpl.ClientConfig{URL: URL})
-		err := XrplRPCClient.Ping([]byte("reconnect_test"))
+
+		// Check if client was created successfully
+		if XrplRPCClient == nil {
+			logger.Log.Warn().Str("url", URL).Int("attempt", attempt).Msg("Failed to create XRPL RPC client (nil returned) during reconnection")
+			time.Sleep(backoff)
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
+		}
+
+		// Use recover to handle potential panics from Ping() if connection is nil
+		var err error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("panic during ping: %v", r)
+					logger.Log.Error().
+						Interface("panic", r).
+						Str("url", URL).
+						Int("attempt", attempt).
+						Msg("Panic occurred during XRPL RPC client reconnect ping - connection may be nil")
+				}
+			}()
+			err = XrplRPCClient.Ping([]byte("reconnect_test"))
+		}()
+
 		if err == nil {
 			logger.Log.Info().Str("url", URL).Int("attempt", attempt).Msg("Successfully reconnected XRPL RPC client")
 			return nil

@@ -280,7 +280,7 @@ func ImportTokenPrices(ctx context.Context, token TokenInfo) error {
 
 	// Fetch data in chunks of 5 days to avoid timeouts
 	// Smaller chunks are more reliable and faster
-	chunkDays := 10
+	chunkDays := 30
 	chunkDuration := time.Duration(chunkDays) * 24 * time.Hour
 	allCandles := make([]OHLCData, 0)
 

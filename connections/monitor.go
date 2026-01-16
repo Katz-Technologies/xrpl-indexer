@@ -1,6 +1,7 @@
 package connections
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/xrpscan/platform/logger"
@@ -13,11 +14,27 @@ func MonitorXRPLConnection() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if XrplClient == nil {
+		// Check if client exists (with mutex-like check to avoid race condition)
+		client := XrplClient
+		if client == nil {
 			continue
 		}
 
-		if err := XrplClient.Ping([]byte("ping")); err != nil {
+		// Use recover to handle potential panics from Ping() if connection is nil
+		var err error
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					err = fmt.Errorf("panic during ping: %v", r)
+					logger.Log.Error().
+						Interface("panic", r).
+						Msg("Panic occurred during XRPL client ping - connection may be nil")
+				}
+			}()
+			err = client.Ping([]byte("ping"))
+		}()
+
+		if err != nil {
 			logger.Log.Warn().Err(err).Msg("XRPL ping failed; reconnecting and resubscribing")
 
 			// Close old client (ignore errors)

@@ -92,7 +92,7 @@ services:
       - "--server-path"
       - "./bin/platform-server"
       - "--log-file"
-      - "logs/indexer-orchestrator.log"
+      - "logs/realtime-indexer-orchestrator.log"
       - "--check-interval"
       - "10s"
       - "--servers"

@@ -169,31 +169,145 @@ func AddNewToken(ctx context.Context, currency, issuer string, ledgerIndex uint3
 	// Version for ReplacingMergeTree (use Unix timestamp)
 	version := uint64(timestamp.UTC().Unix())
 
-	// Insert into new_tokens table
+	// Insert into new_tokens table with retry logic
 	queryNewTokens := fmt.Sprintf(`
 		INSERT INTO xrpl.new_tokens 
 		(currency_code, issuer, first_seen_ledger_index, first_seen_in_ledger_index, create_timestamp)
 		VALUES ('%s', '%s', %d, %d, toDateTime64('%s', 3, 'UTC'))
 	`, currencyEscaped, issuerEscaped, ledgerIndex, inLedgerIndex, timestampStr)
 
-	err := ClickHouseConn.Exec(ctx, queryNewTokens)
-	if err != nil {
-		return fmt.Errorf("failed to insert new token into new_tokens: %w", err)
+	maxRetriesNewTokens := 3
+	baseDelayNewTokens := 500 * time.Millisecond
+	maxDelayNewTokens := 5 * time.Second
+	var lastErrNewTokens error
+	retryCtx := ctx
+
+	for attempt := 0; attempt < maxRetriesNewTokens; attempt++ {
+		if attempt > 0 {
+			delay := baseDelayNewTokens * time.Duration(1<<uint(attempt-1))
+			if delay > maxDelayNewTokens {
+				delay = maxDelayNewTokens
+			}
+			logger.Log.Warn().
+				Err(lastErrNewTokens).
+				Str("currency", currency).
+				Str("issuer", issuer).
+				Int("attempt", attempt+1).
+				Dur("retry_in", delay).
+				Msg("Retrying new_tokens insert")
+			time.Sleep(delay)
+
+			// Recreate context for retry
+			var retryCancel context.CancelFunc
+			retryCtx, retryCancel = context.WithTimeout(context.Background(), 10*time.Second)
+			defer retryCancel()
+		}
+
+		lastErrNewTokens = ClickHouseConn.Exec(retryCtx, queryNewTokens)
+		if lastErrNewTokens == nil {
+			if attempt > 0 {
+				logger.Log.Info().
+					Str("currency", currency).
+					Str("issuer", issuer).
+					Int("attempt", attempt+1).
+					Msg("Successfully inserted token into new_tokens after retry")
+			}
+			break
+		}
+
+		// Check if error is retryable
+		if !IsRetryableError(lastErrNewTokens) {
+			logger.Log.Error().
+				Err(lastErrNewTokens).
+				Str("currency", currency).
+				Str("issuer", issuer).
+				Msg("Non-retryable error inserting token into new_tokens")
+			return fmt.Errorf("failed to insert new token into new_tokens (non-retryable): %w", lastErrNewTokens)
+		}
+
+		if attempt == maxRetriesNewTokens-1 {
+			logger.Log.Error().
+				Err(lastErrNewTokens).
+				Str("currency", currency).
+				Str("issuer", issuer).
+				Int("max_retries", maxRetriesNewTokens).
+				Msg("Failed to insert token into new_tokens after all retries")
+			return fmt.Errorf("failed to insert new token into new_tokens after %d retries: %w", maxRetriesNewTokens, lastErrNewTokens)
+		}
 	}
 
-	// Insert into known_tokens table to prevent duplicates
+	if lastErrNewTokens != nil {
+		return fmt.Errorf("failed to insert new token into new_tokens: %w", lastErrNewTokens)
+	}
+
+	// Insert into known_tokens table to prevent duplicates with retry logic
 	queryKnownTokens := fmt.Sprintf(`
 		INSERT INTO xrpl.known_tokens 
 		(currency, issuer, version)
 		VALUES ('%s', '%s', %d)
 	`, currencyEscaped, issuerEscaped, version)
 
-	err = ClickHouseConn.Exec(ctx, queryKnownTokens)
-	if err != nil {
-		return fmt.Errorf("failed to insert new token into known_tokens: %w", err)
+	maxRetriesKnownTokens := 3
+	baseDelayKnownTokens := 500 * time.Millisecond
+	maxDelayKnownTokens := 5 * time.Second
+	var lastErrKnownTokens error
+	retryCtxKnown := ctx
+
+	for attempt := 0; attempt < maxRetriesKnownTokens; attempt++ {
+		if attempt > 0 {
+			delay := baseDelayKnownTokens * time.Duration(1<<uint(attempt-1))
+			if delay > maxDelayKnownTokens {
+				delay = maxDelayKnownTokens
+			}
+			logger.Log.Warn().
+				Err(lastErrKnownTokens).
+				Str("currency", currency).
+				Str("issuer", issuer).
+				Int("attempt", attempt+1).
+				Dur("retry_in", delay).
+				Msg("Retrying known_tokens insert")
+			time.Sleep(delay)
+
+			// Recreate context for retry
+			var retryCancelKnown context.CancelFunc
+			retryCtxKnown, retryCancelKnown = context.WithTimeout(context.Background(), 10*time.Second)
+			defer retryCancelKnown()
+		}
+
+		lastErrKnownTokens = ClickHouseConn.Exec(retryCtxKnown, queryKnownTokens)
+		if lastErrKnownTokens == nil {
+			if attempt > 0 {
+				logger.Log.Info().
+					Str("currency", currency).
+					Str("issuer", issuer).
+					Int("attempt", attempt+1).
+					Msg("Successfully inserted token into known_tokens after retry")
+			}
+			return nil
+		}
+
+		// Check if error is retryable
+		if !IsRetryableError(lastErrKnownTokens) {
+			logger.Log.Error().
+				Err(lastErrKnownTokens).
+				Str("currency", currency).
+				Str("issuer", issuer).
+				Msg("Non-retryable error inserting token into known_tokens")
+			return fmt.Errorf("failed to insert new token into known_tokens (non-retryable): %w", lastErrKnownTokens)
+		}
+
+		if attempt == maxRetriesKnownTokens-1 {
+			logger.Log.Error().
+				Err(lastErrKnownTokens).
+				Str("currency", currency).
+				Str("issuer", issuer).
+				Int("max_retries", maxRetriesKnownTokens).
+				Msg("Failed to insert token into known_tokens after all retries")
+			return fmt.Errorf("failed to insert new token into known_tokens after %d retries: %w", maxRetriesKnownTokens, lastErrKnownTokens)
+		}
 	}
 
-	return nil
+	return fmt.Errorf("failed to insert new token into known_tokens: %w", lastErrKnownTokens)
 }
 
 // CheckTokenViaXRPLAPI checks if a token has transaction history via XRPL account_tx API
