@@ -68,7 +68,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 # Default command
 # Can be overridden with docker run or docker-compose
 CMD ["./platform-indexer-orchestrator", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--config", ".env", \
      "--server-path", "./bin/platform-server", \
      "--log-file", "logs/realtime-indexer-orchestrator.log", \

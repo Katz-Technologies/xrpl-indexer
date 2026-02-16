@@ -67,9 +67,12 @@ func CloseXrplClient() {
 		log.Printf("Error flushing ClickHouse before closing XRPL client: %v", err)
 	}
 
+	var clientToClose = XrplClient
+	XrplClient = nil
+
 	closeWithTimeout("XRPL client", func() error {
-		if XrplClient != nil {
-			return XrplClient.Close()
+		if clientToClose != nil {
+			return clientToClose.Close()
 		}
 		return nil
 	})

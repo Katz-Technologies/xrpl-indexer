@@ -633,6 +633,8 @@ func IsRetryableError(err error) bool {
 		"temporary failure",
 		"i/o timeout",
 		"context deadline exceeded",
+		"websocket",
+		"close sent",
 	}
 
 	for _, pattern := range retryablePatterns {

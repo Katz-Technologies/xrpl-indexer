@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -154,15 +155,15 @@ func (o *IndexerOrchestrator) startWorkers() error {
 
 	o.workers = make([]*IndexerWorker, 0, o.config.Workers)
 
-	for i := 0; i < o.config.Workers; i++ {
-		// Distribute servers using round-robin (like in backfill orchestrator)
-		server := o.config.Servers[i%len(o.config.Servers)]
+	// Pass all servers as comma-separated list so the worker can failover between them
+	allServers := strings.Join(o.config.Servers, ",")
 
+	for i := 0; i < o.config.Workers; i++ {
 		worker, err := NewIndexerWorker(
 			i+1,
 			o.config.ServerPath,
 			o.config.ConfigFile,
-			server,
+			allServers,
 		)
 		if err != nil {
 			o.StopAllWorkers(false)
@@ -179,7 +180,7 @@ func (o *IndexerOrchestrator) startWorkers() error {
 		// Start goroutine to handle IPC communication for this worker
 		go o.handleWorkerIPC(worker)
 
-		log.Printf("[INDEXER-ORCHESTRATOR] Started worker %d with PID %d on server %s", worker.ID, worker.PID(), server)
+		log.Printf("[INDEXER-ORCHESTRATOR] Started worker %d with PID %d (servers: %s)", worker.ID, worker.PID(), allServers)
 	}
 
 	return nil
