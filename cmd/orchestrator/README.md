@@ -70,11 +70,11 @@ make build
 ## Логи
 
 Каждый worker процесс пишет логи в отдельный файл:
-- `logs/orchestrator-worker-1.log`
-- `logs/orchestrator-worker-2.log`
+- `logs/backfill-worker-1.log`
+- `logs/backfill-worker-2.log`
 - и т.д.
 
-Логи оркестратора выводятся в stdout/stderr.
+Логи оркестратора выводятся в stdout/stderr (обычно перенаправляются в `logs/backfill-orchestrator.log`).
 
 ## Примеры
 

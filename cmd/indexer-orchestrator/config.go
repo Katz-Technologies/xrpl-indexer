@@ -23,7 +23,7 @@ func ParseConfig() (*Config, error) {
 	flag.StringVar(&cfg.ConfigFile, "config", ".env", "Environment config file")
 	flag.StringVar(&cfg.ServerPath, "server-path", "./bin/platform-server", "Path to platform-server executable")
 	flag.DurationVar(&cfg.CheckInterval, "check-interval", 10*time.Second, "Interval to check worker status")
-	flag.StringVar(&cfg.LogFile, "log-file", "logs/indexer-orchestrator.log", "Path to orchestrator log file")
+	flag.StringVar(&cfg.LogFile, "log-file", "logs/realtime-indexer-orchestrator.log", "Path to orchestrator log file")
 
 	serversStr := flag.String("servers", "wss://s1.ripple.com/,wss://s2.ripple.com/,wss://xrplcluster.com/",
 		"Comma-separated list of XRPL server URLs (default: s1, s2, and xrplcluster)")

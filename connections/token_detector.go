@@ -2,11 +2,6 @@ package connections
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/xrpscan/platform/logger"
@@ -184,86 +179,6 @@ func ExtractTokensFromTransaction(tx map[string]interface{}, inLedgerIndex uint3
 	}
 
 	return result
-}
-
-// extractTokenFromRippleState extracts token from RippleState fields
-func extractTokenFromRippleState(fields map[string]interface{}, addToken func(string, string)) {
-	highLimit, _ := fields["HighLimit"].(map[string]interface{})
-	lowLimit, _ := fields["LowLimit"].(map[string]interface{})
-
-	if highLimit != nil {
-		if currency, _ := highLimit["currency"].(string); currency != "" {
-			if issuer, _ := highLimit["issuer"].(string); issuer != "" {
-				addToken(currency, issuer)
-			}
-		}
-	}
-
-	if lowLimit != nil {
-		if currency, _ := lowLimit["currency"].(string); currency != "" {
-			if issuer, _ := lowLimit["issuer"].(string); issuer != "" {
-				addToken(currency, issuer)
-			}
-		}
-	}
-}
-
-var (
-	tokenLogFile     *os.File
-	tokenLogFileMu   sync.Mutex
-	tokenLogFileInit sync.Once
-)
-
-// initTokenLogFile initializes the token log file
-func initTokenLogFile() error {
-	var err error
-	tokenLogFileInit.Do(func() {
-		logDir := "logs"
-		if err := os.MkdirAll(logDir, 0755); err != nil {
-			return
-		}
-
-		logFile := filepath.Join(logDir, "token-extractions.jsonl")
-		tokenLogFile, err = os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return
-		}
-	})
-	return err
-}
-
-// writeTokenExtraction writes token extraction info to file
-func writeTokenExtraction(ledgerIndex uint32, tokenExtractions []TokenExtractionInfo) {
-	tokenLogFileMu.Lock()
-	defer tokenLogFileMu.Unlock()
-
-	if err := initTokenLogFile(); err != nil {
-		logger.Log.Warn().Err(err).Msg("Failed to initialize token log file")
-		return
-	}
-
-	for _, extraction := range tokenExtractions {
-		entry := map[string]interface{}{
-			"timestamp":       time.Now().UTC().Format(time.RFC3339),
-			"ledger_index":    ledgerIndex,
-			"currency":        extraction.Currency,
-			"issuer":          extraction.Issuer,
-			"in_ledger_index": extraction.InLedgerIndex,
-			"tx_hash":         extraction.TxHash,
-			"tx_type":         extraction.TxType,
-			"source_field":    extraction.SourceField,
-		}
-
-		jsonData, err := json.Marshal(entry)
-		if err != nil {
-			logger.Log.Warn().Err(err).Msg("Failed to marshal token extraction entry")
-			continue
-		}
-
-		if _, err := fmt.Fprintln(tokenLogFile, string(jsonData)); err != nil {
-			logger.Log.Warn().Err(err).Msg("Failed to write token extraction to file")
-		}
-	}
 }
 
 // CheckAndNotifyNewTokens checks tokens from payout money_flow records and notifies about new ones

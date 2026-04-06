@@ -36,7 +36,7 @@ const (
 
 func NewIndexerWorker(id int, serverPath, configFile, serverURL string) (*IndexerWorker, error) {
 	// Create log file for this worker
-	logPath := fmt.Sprintf("logs/indexer-worker-%d.log", id)
+	logPath := fmt.Sprintf("logs/realtime-indexer-worker-%d.log", id)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
@@ -134,6 +134,23 @@ func (w *IndexerWorker) Start() error {
 	w.status = WorkerStatusRunning
 	w.startTime = time.Now()
 
+	// Reap process in background so CheckStatus() sees ProcessState when worker exits (e.g. panic)
+	go func() {
+		err := w.subprocess.Wait()
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if w.status == WorkerStatusRunning {
+			if err == nil {
+				w.status = WorkerStatusCompleted
+			} else {
+				w.status = WorkerStatusFailed
+			}
+			now := time.Now()
+			w.stopTime = &now
+			log.Printf("[WORKER-%d] Process exited with status: %v (err: %v)", w.ID, w.status, err)
+		}
+	}()
+
 	log.Printf("[WORKER-%d] Started with PID %d, stderr should be writing to log file", w.ID, w.PID())
 
 	// Write another test message after process start
@@ -145,9 +162,12 @@ func (w *IndexerWorker) Start() error {
 }
 
 func (w *IndexerWorker) Stop(graceful bool) error {
+	w.mu.Lock()
 	if w.status != WorkerStatusRunning {
+		w.mu.Unlock()
 		return nil // Already stopped
 	}
+	w.mu.Unlock()
 
 	log.Printf("[WORKER-%d] Stopping worker (graceful=%v)...", w.ID, graceful)
 
@@ -177,9 +197,11 @@ func (w *IndexerWorker) Stop(graceful bool) error {
 		w.subprocess.Wait()
 	}
 
+	w.mu.Lock()
 	now := time.Now()
 	w.stopTime = &now
 	w.status = WorkerStatusStopped
+	w.mu.Unlock()
 
 	if w.logFile != nil {
 		w.logFile.Close()
@@ -190,14 +212,15 @@ func (w *IndexerWorker) Stop(graceful bool) error {
 }
 
 func (w *IndexerWorker) CheckStatus() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.status != WorkerStatusRunning {
 		return nil
 	}
 
-	// Check if process is still running
+	// ProcessState is set when Wait() returns; reaper goroutine started in Start() calls Wait()
 	processState := w.subprocess.ProcessState()
 	if processState != nil {
-		// Process has exited
 		if processState.Success() {
 			w.status = WorkerStatusCompleted
 		} else {
@@ -208,14 +231,6 @@ func (w *IndexerWorker) CheckStatus() error {
 		log.Printf("[WORKER-%d] Process exited with status: %v (exit code: %v)", w.ID, w.status, processState.ExitCode())
 		return nil
 	}
-
-	// On Windows, we need a different approach to check if process is running
-	// Check if process state is available (means process has exited)
-	// If not available, assume process is still running
-	// Don't call Wait() here as it will block until process exits
-
-	// Just check if ProcessState is available - if it is, process has exited
-	// If not, process is still running (we'll check again next time)
 	return nil
 }
 
@@ -262,14 +277,20 @@ func (w *IndexerWorker) updateStatusFromWait() {
 }
 
 func (w *IndexerWorker) IsRunning() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.status == WorkerStatusRunning
 }
 
 func (w *IndexerWorker) IsCompleted() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.status == WorkerStatusCompleted
 }
 
 func (w *IndexerWorker) IsFailed() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.status == WorkerStatusFailed
 }
 

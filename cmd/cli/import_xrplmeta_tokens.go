@@ -452,7 +452,7 @@ func importTokenBatch(ctx context.Context, tokens []TokenPair) error {
 		issuerEscaped := escapeSQLString(token.Issuer)
 
 		values = append(values, fmt.Sprintf(
-			"('%s', '%s', toDateTime64('%s', 3, 'UTC'), %d)",
+			"('%s', '%s', %d)",
 			currencyEscaped,
 			issuerEscaped,
 			version,
@@ -461,7 +461,7 @@ func importTokenBatch(ctx context.Context, tokens []TokenPair) error {
 
 	query := fmt.Sprintf(`
 		INSERT INTO xrpl.known_tokens 
-		(currency, issuer, created_at, version)
+		(currency, issuer, version)
 		VALUES %s
 	`, strings.Join(values, ", "))
 

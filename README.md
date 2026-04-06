@@ -291,7 +291,7 @@ nohup ./run.sh > logs/backfill.log 2>&1 &
 Для запуска оркестратора в фоне:
 
 ```bash
-./bin/platform-orchestrator --workers 2 --from 98900000 --to 99119667 --servers "wss://s1.ripple.com/,wss://s2.ripple.com/" --check-interval 30s --verbose --redistribute-threshold 5000 > logs/orchestrator.log 2>&1 &
+./bin/platform-orchestrator --workers 2 --from 100000000 --to 101513798 --servers "wss://s1.ripple.com/,wss://s2.ripple.com/" --check-interval 30s --verbose --redistribute-threshold 5000 > logs/backfill-orchestrator.log 2>&1 &
 ```
 
 Для остановки оркестратора:
@@ -301,8 +301,10 @@ touch stop.orchestrator
 ```
 
 Логи будут записываться в:
-- `logs/orchestrator.log` - логи оркестратора
-- `logs/orchestrator-worker-*.log` - логи воркеров
+- `logs/backfill-orchestrator.log` - логи оркестратора бэкфиллинга
+- `logs/backfill-worker-*.log` - логи воркеров бэкфиллинга
+- `logs/realtime-indexer-orchestrator.log` - логи оркестратора индексации в реальном времени
+- `logs/realtime-indexer-worker-*.log` - логи воркеров индексации в реальном времени
 - `logs/backfill.log` - логи бэкфиллинга
 
 ## 🔌 API

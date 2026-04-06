@@ -3,6 +3,7 @@ package producers
 import (
 	"encoding/json"
 	"sync/atomic"
+	"time"
 
 	"github.com/xrpscan/platform/connections"
 	"github.com/xrpscan/platform/logger"
@@ -14,8 +15,19 @@ var lastSeenLedgerIndex uint32
 func RunProducers() {
 	logger.Log.Info().Msg("Producers started, waiting for ledgers...")
 	for {
+		client := connections.XrplClient
+		if client == nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
 		select {
-		case ledger := <-connections.XrplClient.StreamLedger:
+		case ledger, ok := <-client.StreamLedger:
+			if !ok {
+				logger.Log.Warn().Msg("XRPL ledger stream closed; waiting for reconnect")
+				time.Sleep(time.Second)
+				continue
+			}
 			// Log each realtime ledger arrival to console
 			var ls models.LedgerStream
 			if err := json.Unmarshal(ledger, &ls); err == nil && ls.Type == models.LEDGER_STREAM_TYPE {
@@ -41,19 +53,54 @@ func RunProducers() {
 			// Pass isRealtime=true to emit SocketIO events for real-time transactions
 			go ProcessTransactionsDirectly(ledger, true)
 
-		case <-connections.XrplClient.StreamValidation:
+		case _, ok := <-client.StreamValidation:
+			if !ok {
+				logger.Log.Warn().Msg("XRPL validation stream closed; waiting for reconnect")
+				time.Sleep(time.Second)
+				continue
+			}
 			// ignore
-		case <-connections.XrplClient.StreamPeerStatus:
+		case _, ok := <-client.StreamPeerStatus:
+			if !ok {
+				logger.Log.Warn().Msg("XRPL peer status stream closed; waiting for reconnect")
+				time.Sleep(time.Second)
+				continue
+			}
 			// ignore
-		case <-connections.XrplClient.StreamConsensus:
+		case _, ok := <-client.StreamConsensus:
+			if !ok {
+				logger.Log.Warn().Msg("XRPL consensus stream closed; waiting for reconnect")
+				time.Sleep(time.Second)
+				continue
+			}
 			// ignore
-		case <-connections.XrplClient.StreamPathFind:
+		case _, ok := <-client.StreamPathFind:
+			if !ok {
+				logger.Log.Warn().Msg("XRPL path find stream closed; waiting for reconnect")
+				time.Sleep(time.Second)
+				continue
+			}
 			// ignore
-		case <-connections.XrplClient.StreamManifest:
+		case _, ok := <-client.StreamManifest:
+			if !ok {
+				logger.Log.Warn().Msg("XRPL manifest stream closed; waiting for reconnect")
+				time.Sleep(time.Second)
+				continue
+			}
 			// ignore
-		case <-connections.XrplClient.StreamServer:
+		case _, ok := <-client.StreamServer:
+			if !ok {
+				logger.Log.Warn().Msg("XRPL server stream closed; waiting for reconnect")
+				time.Sleep(time.Second)
+				continue
+			}
 			// ignore
-		case <-connections.XrplClient.StreamDefault:
+		case _, ok := <-client.StreamDefault:
+			if !ok {
+				logger.Log.Warn().Msg("XRPL default stream closed; waiting for reconnect")
+				time.Sleep(time.Second)
+				continue
+			}
 			// ignore
 		}
 	}

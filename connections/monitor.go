@@ -2,8 +2,6 @@ package connections
 
 import (
 	"time"
-
-	"github.com/xrpscan/platform/logger"
 )
 
 // MonitorXRPLConnection periodically pings the XRPL streaming client.
@@ -13,19 +11,17 @@ func MonitorXRPLConnection() {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if XrplClient == nil {
+		// Check if client exists (with mutex-like check to avoid race condition)
+		client := XrplClient
+		if client == nil {
+			ReconnectXRPL(nil, "monitor client nil")
 			continue
 		}
 
-		if err := XrplClient.Ping([]byte("ping")); err != nil {
-			logger.Log.Warn().Err(err).Msg("XRPL ping failed; reconnecting and resubscribing")
+		err := safePingXRPL(client, []byte("ping"), "monitor")
 
-			// Close old client (ignore errors)
-			CloseXrplClient()
-
-			// Recreate client and resubscribe
-			NewXrplClient()
-			SubscribeStreams()
+		if err != nil {
+			ReconnectXRPL(err, "monitor ping failed")
 		}
 	}
 }
