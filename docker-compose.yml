@@ -24,7 +24,7 @@ services:
       retries: 30
       start_period: 10s
     cpus: "3.6"
-    mem_limit: "6.5g"
+    mem_limit: "6g"
     mem_reservation: "6g"
     restart: unless-stopped
 
@@ -75,6 +75,7 @@ services:
     ports:
       - "8080:3002"
     restart: always
+    mem_limit: "1g"
     command:
       - "./platform-indexer-orchestrator"
       - "--workers"
