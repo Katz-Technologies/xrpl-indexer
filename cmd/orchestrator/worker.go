@@ -47,7 +47,7 @@ func NewWorker(id int, fromLedger, toLedger int, ledgers []int, server, cliPath,
 		}
 	}
 	// Create log file for this worker
-	logPath := fmt.Sprintf("logs/orchestrator-worker-%d.log", id)
+	logPath := fmt.Sprintf("logs/backfill-worker-%d.log", id)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create log file: %w", err)
@@ -66,7 +66,7 @@ func NewWorker(id int, fromLedger, toLedger int, ledgers []int, server, cliPath,
 		// For large lists (>1000), use file; otherwise use command line argument
 		if len(ledgers) > 1000 {
 			// Save to file
-			ledgersFile := fmt.Sprintf("logs/orchestrator-worker-%d-ledgers.txt", id)
+			ledgersFile := fmt.Sprintf("logs/backfill-worker-%d-ledgers.txt", id)
 			file, err := os.Create(ledgersFile)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create ledgers file: %w", err)

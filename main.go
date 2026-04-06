@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -122,6 +123,16 @@ func runServerMode() {
 
 	// Initialize SocketIO hub
 	socketio.GetHub()
+
+	// Check if token_ohlc table is empty and import prices if needed
+	go func() {
+		ctx := context.Background()
+		if err := connections.ImportAllTokenPrices(ctx); err != nil {
+			logger.Log.Error().
+				Err(err).
+				Msg("Failed to import token prices, continuing with server startup")
+		}
+	}()
 
 	go connections.SubscribeStreams()
 	go connections.MonitorXRPLConnection()

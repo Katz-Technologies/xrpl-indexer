@@ -82,9 +82,6 @@ func (ledger *LedgerStream) FetchTransactions() (xrpl.BaseResponse, error) {
 		"expand":       true,
 	}
 
-	// Prefer RPC client to avoid contention with streaming client
-	client := connections.GetXRPLRequestClient()
-
 	// Retry logic with exponential backoff
 	// Increased retries and timeout to handle slow XRPL server responses
 	maxRetries := 5
@@ -103,12 +100,17 @@ func (ledger *LedgerStream) FetchTransactions() (xrpl.BaseResponse, error) {
 				Err(err).
 				Msg("XRPL RPC connection health check failed before request")
 			lastErr = fmt.Errorf("connection health check failed: %w", err)
-			// Still retry if it's a retryable error
 			if !connections.IsRetryableError(err) {
 				return nil, lastErr
 			}
+			// Reconnect RPC client before retry - blocks until success
+			logger.Log.Info().
+				Uint32("ledger_index", ledger.LedgerIndex).
+				Msg("Reconnecting XRPL RPC client due to health check failure")
+			connections.EnsureXRPLRPCConnected()
 		} else {
 			// Connection is healthy, try the request
+			client := connections.GetXRPLRequestClient()
 			response, err := ledger.fetchTransactionsWithTimeout(client, request, requestId, requestTimeout)
 			if err == nil {
 				return response, nil
@@ -217,6 +219,26 @@ func (ledger *LedgerStream) fetchTransactionsWithTimeout(client *xrpl.Client, re
 		}
 
 		return nil, err
+	}
+
+	// Check if response contains an error status from XRPL
+	if response != nil {
+		if status, ok := response["status"].(string); ok && status == "error" {
+			var errorMsg string
+			if errMsg, ok := response["error"].(string); ok {
+				errorMsg = errMsg
+			} else {
+				errorMsg = "unknown error"
+			}
+			requestDuration := time.Since(startTime)
+			logger.Log.Warn().
+				Uint32("ledger_index", ledger.LedgerIndex).
+				Str("request_id", requestId).
+				Str("error", errorMsg).
+				Dur("request_duration", requestDuration).
+				Msg("XRPL API returned error status in response")
+			return nil, fmt.Errorf("XRPL API error: %s", errorMsg)
+		}
 	}
 
 	requestDuration := time.Since(startTime)

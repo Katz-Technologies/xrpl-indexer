@@ -68,10 +68,10 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 # Default command
 # Can be overridden with docker run or docker-compose
 CMD ["./platform-indexer-orchestrator", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--config", ".env", \
      "--server-path", "./bin/platform-server", \
-     "--log-file", "logs/indexer-orchestrator.log", \
+     "--log-file", "logs/realtime-indexer-orchestrator.log", \
      "--check-interval", "10s", \
      "--servers", "wss://s1.ripple.com/,wss://s2.ripple.com/,wss://xrplcluster.com/"]
 

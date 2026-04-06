@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -89,11 +90,20 @@ func (o *IndexerOrchestrator) Run(ctx context.Context, cancel context.CancelFunc
 		// Start HTTP server for SocketIO connections
 		go o.startHTTPServer()
 
+		// Check if token_ohlc table is empty and import prices if needed
+		go func() {
+			importCtx := context.Background()
+			if err := connections.ImportAllTokenPrices(importCtx); err != nil {
+				log.Printf("[INDEXER-ORCHESTRATOR] Failed to import token prices: %v", err)
+			}
+		}()
+
 		o.chInitialized = true
 		log.Printf("[INDEXER-ORCHESTRATOR] ClickHouse connection initialized")
 		log.Printf("[INDEXER-ORCHESTRATOR] Batch flush callback set for token detection")
 		log.Printf("[INDEXER-ORCHESTRATOR] XRPL RPC client initialized with URL: %s", orchestratorRPCURL)
 		log.Printf("[INDEXER-ORCHESTRATOR] SocketIO hub initialized")
+		log.Printf("[INDEXER-ORCHESTRATOR] Token price import check started")
 	}
 
 	// Setup signal handlers for graceful shutdown
@@ -145,15 +155,15 @@ func (o *IndexerOrchestrator) startWorkers() error {
 
 	o.workers = make([]*IndexerWorker, 0, o.config.Workers)
 
-	for i := 0; i < o.config.Workers; i++ {
-		// Distribute servers using round-robin (like in backfill orchestrator)
-		server := o.config.Servers[i%len(o.config.Servers)]
+	// Pass all servers as comma-separated list so the worker can failover between them
+	allServers := strings.Join(o.config.Servers, ",")
 
+	for i := 0; i < o.config.Workers; i++ {
 		worker, err := NewIndexerWorker(
 			i+1,
 			o.config.ServerPath,
 			o.config.ConfigFile,
-			server,
+			allServers,
 		)
 		if err != nil {
 			o.StopAllWorkers(false)
@@ -170,7 +180,7 @@ func (o *IndexerOrchestrator) startWorkers() error {
 		// Start goroutine to handle IPC communication for this worker
 		go o.handleWorkerIPC(worker)
 
-		log.Printf("[INDEXER-ORCHESTRATOR] Started worker %d with PID %d on server %s", worker.ID, worker.PID(), server)
+		log.Printf("[INDEXER-ORCHESTRATOR] Started worker %d with PID %d (servers: %s)", worker.ID, worker.PID(), allServers)
 	}
 
 	return nil

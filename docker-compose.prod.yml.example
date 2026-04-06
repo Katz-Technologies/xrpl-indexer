@@ -1,4 +1,8 @@
+# Пример docker-compose.prod.yml для продакшена
+# Скопируйте этот файл в docker-compose.prod.yml на сервере и настройте под ваши нужды
+
 services:
+  # ClickHouse - должен быть запущен на сервере
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse
@@ -16,7 +20,7 @@ services:
       - "8123:8123"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
-      - ./clickhouse/configs/limits.xml:/etc/clickhouse-server/config.d/limits.xml:ro
+      - ./clickhouse/config/limits.xml:/etc/clickhouse-server/config.d/limits.xml:ro
     healthcheck:
       test: ["CMD-SHELL", "clickhouse-client --user=katz --password=katz-password --query='SELECT 1'"]
       interval: 5s
@@ -24,10 +28,11 @@ services:
       retries: 30
       start_period: 10s
     cpus: "3.6"
-    mem_limit: "6g"
+    mem_limit: "6.5g"
     mem_reservation: "6g"
     restart: unless-stopped
 
+  # Сервис для запуска миграций (выполняется при каждом деплое через CI/CD)
   clickhouse-init:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse-init
@@ -40,19 +45,19 @@ services:
     command: -c "for f in /ddl/*.sql; do echo Running $$f; clickhouse-client --host clickhouse --user=katz --password=katz-password --multiquery < $$f; done"
     restart: "no"
 
+  # Этот сервис деплоится через CI/CD
   indexer-orchestrator:
-    build:
-      context: .
-      dockerfile: cmd/indexer-orchestrator/Dockerfile
+    image: ghcr.io/xrpscan/platform:latest  # или :main, будет обновляться автоматически
     container_name: indexer-orchestrator
     depends_on:
       clickhouse:
         condition: service_healthy
-      clickhouse-init:
-        condition: service_completed_successfully
     environment:
+      # Server settings
       SERVER_HOST: "0.0.0.0"
       SERVER_PORT: "3002"
+      
+      # Logging
       LOG_LEVEL: "info"
       LOG_TYPE: "console"
       LOG_FILE_ENABLED: "true"
@@ -60,26 +65,28 @@ services:
       LOG_FILE_MAX_SIZE_MB: "100"
       LOG_FILE_MAX_BACKUPS: "3"
       LOG_FILE_MAX_AGE_DAYS: "7"
+      
+      # ClickHouse connection
       CLICKHOUSE_HOST: "clickhouse"
       CLICKHOUSE_PORT: "9000"
       CLICKHOUSE_DATABASE: "xrpl"
       CLICKHOUSE_USER: "katz"
       CLICKHOUSE_PASSWORD: "katz-password"
-      CLICKHOUSE_BATCH_SIZE: "1000"
-      CLICKHOUSE_BATCH_TIMEOUT_MS: "120000"
-      XRPL_WEBSOCKET_URL: "wss://s1.ripple.com/,wss://s2.ripple.com/,wss://xrplcluster.com/"
+      CLICKHOUSE_BATCH_SIZE: "5000"
+      CLICKHOUSE_BATCH_TIMEOUT_MS: "5000"
+      
+      # XRPL settings
+      XRPL_WEBSOCKET_URL: "wss://s1.ripple.com/"
       XRPL_WEBSOCKET_FULLHISTORY_URL: "wss://xrplcluster.com/"
     volumes:
       - ./logs:/app/logs
-      - ./.env.docker:/app/.env:ro
     ports:
       - "8080:3002"
-    restart: always
-    mem_limit: "1g"
+    restart: unless-stopped
     command:
       - "./platform-indexer-orchestrator"
       - "--workers"
-      - "1"
+      - "2"
       - "--config"
       - ".env"
       - "--server-path"
@@ -96,51 +103,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-
-  backfill-orchestrator:
-    build:
-      context: .
-      dockerfile: cmd/orchestrator/Dockerfile
-    container_name: backfill-orchestrator
-    depends_on:
-      clickhouse:
-        condition: service_healthy
-      clickhouse-init:
-        condition: service_completed_successfully
-    environment:
-      BACKFILL_FROM: "102196020"
-      BACKFILL_TO: "102198036"
-      CLICKHOUSE_HOST: "clickhouse"
-      CLICKHOUSE_PORT: "9000"
-      CLICKHOUSE_DATABASE: "xrpl"
-      CLICKHOUSE_USER: "katz"
-      CLICKHOUSE_PASSWORD: "katz-password"
-    volumes:
-      - ./logs:/app/logs
-      - ./.env.docker:/app/.env:ro
-    restart: always
-    command:
-      - /bin/sh
-      - -c
-      - >
-        rm -f logs/backfill-worker-*-ledgers.txt &&
-        ./platform-orchestrator
-        --workers 2
-        --from "$${BACKFILL_FROM}"
-        --to "$${BACKFILL_TO}"
-        --servers "wss://s1.ripple.com/,wss://s2.ripple.com/"
-        --check-interval 30s
-        --config .env
-        --cli-path ./bin/platform-cli
-        --verbose
-        --redistribute-threshold 5000
-        >> logs/backfill-orchestrator.log 2>&1
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f platform-orchestrator > /dev/null || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
 
 volumes:
   clickhouse-data:

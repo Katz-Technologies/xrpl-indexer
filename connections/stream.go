@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/xrpscan/platform/logger"
@@ -26,10 +27,7 @@ func SubscribeStreams() {
 			continue
 		}
 
-		response, err := XrplClient.Subscribe([]string{
-			xrpl.StreamTypeLedger,
-			xrpl.StreamTypeValidations,
-		})
+		response, err := safeSubscribeStreams(XrplClient)
 		if err != nil {
 			logger.Log.Warn().Dur("retry_in", backoff).Err(err).Msg("xrpl.Subscribe failed; retrying")
 		} else if status, ok := response["status"].(string); ok && status == "error" {
@@ -72,10 +70,7 @@ func UnsubscribeStreams() {
 	// Run unsubscribe in a goroutine with timeout
 	go func() {
 		defer close(done)
-		response, err = XrplClient.Unsubscribe([]string{
-			xrpl.StreamTypeLedger,
-			xrpl.StreamTypeValidations,
-		})
+		response, err = safeUnsubscribeStreams(XrplClient)
 	}()
 
 	// Wait for completion or timeout
@@ -89,4 +84,54 @@ func UnsubscribeStreams() {
 	case <-ctx.Done():
 		logger.Log.Warn().Msg("xrpl.Unsubscribe timed out after 5 seconds")
 	}
+}
+
+func safeSubscribeStreams(client *xrpl.Client) (map[string]interface{}, error) {
+	if client == nil {
+		return nil, fmt.Errorf("XRPL client is nil")
+	}
+
+	var response map[string]interface{}
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic during subscribe: %v", r)
+				logger.Log.Error().
+					Interface("panic", r).
+					Msg("Panic occurred during xrpl.Subscribe - connection may be nil")
+			}
+		}()
+		response, err = client.Subscribe([]string{
+			xrpl.StreamTypeLedger,
+			xrpl.StreamTypeValidations,
+		})
+	}()
+
+	return response, err
+}
+
+func safeUnsubscribeStreams(client *xrpl.Client) (map[string]interface{}, error) {
+	if client == nil {
+		return nil, fmt.Errorf("XRPL client is nil")
+	}
+
+	var response map[string]interface{}
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic during unsubscribe: %v", r)
+				logger.Log.Error().
+					Interface("panic", r).
+					Msg("Panic occurred during xrpl.Unsubscribe - connection may be nil")
+			}
+		}()
+		response, err = client.Unsubscribe([]string{
+			xrpl.StreamTypeLedger,
+			xrpl.StreamTypeValidations,
+		})
+	}()
+
+	return response, err
 }

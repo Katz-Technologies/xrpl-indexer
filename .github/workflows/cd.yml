@@ -1,0 +1,142 @@
+name: CD - Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: xrpscan/platform
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./cmd/indexer-orchestrator/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to server
+        if: github.ref == 'refs/heads/main'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            cd ${{ secrets.DEPLOY_PATH }}
+            # Обновляем имя образа в docker-compose.prod.yml на lowercase (если еще не обновлено)
+            sed -i 's|ghcr.io/Xrpscan/platform|ghcr.io/xrpscan/platform|g' docker-compose.prod.yml 2>/dev/null || echo "docker-compose.prod.yml not found or already updated"
+            # Пытаемся обновить код через git (если настроен доступ)
+            git pull origin main 2>/dev/null || echo "Git pull skipped (repository may be private or not configured)"
+            # Логин в GHCR - используем GHCR_TOKEN если есть, иначе пробуем GITHUB_TOKEN через переменную
+            if [ -n "${{ secrets.GHCR_TOKEN }}" ]; then
+              echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ secrets.GHCR_USERNAME || github.actor }} --password-stdin
+            else
+              echo "Warning: GHCR_TOKEN not set, trying to use existing docker login"
+            fi
+            # Проверяем доступные теги образа
+            echo "Available tags for ghcr.io/xrpscan/platform:"
+            docker images ghcr.io/xrpscan/platform 2>/dev/null || echo "No local images found"
+            # Пытаемся pull
+            docker compose -f docker-compose.prod.yml pull indexer-orchestrator || {
+              echo "Failed to pull with :latest, trying :main tag"
+              sed -i 's|:latest|:main|g' docker-compose.prod.yml
+              docker compose -f docker-compose.prod.yml pull indexer-orchestrator
+            }
+            # Проверяем, что ClickHouse работает перед запуском миграций
+            echo "Checking ClickHouse health..."
+            docker compose -f docker-compose.prod.yml ps clickhouse || {
+              echo "ClickHouse is not running, starting it..."
+              docker compose -f docker-compose.prod.yml up -d clickhouse
+              echo "Waiting for ClickHouse to be healthy..."
+              timeout 60 bash -c 'until docker compose -f docker-compose.prod.yml exec -T clickhouse clickhouse-client --user=katz --password=katz-password --query="SELECT 1" > /dev/null 2>&1; do sleep 2; done' || {
+                echo "ClickHouse health check timeout"
+                exit 1
+              }
+            }
+            # Запускаем миграции (clickhouse-init)
+            echo "Running ClickHouse migrations..."
+            # Удаляем старый контейнер если существует
+            docker compose -f docker-compose.prod.yml rm -f clickhouse-init 2>/dev/null || true
+            # Запускаем миграции
+            docker compose -f docker-compose.prod.yml up --remove-orphans clickhouse-init
+            MIGRATION_EXIT_CODE=$?
+            # Удаляем контейнер после выполнения (так как restart: "no")
+            docker compose -f docker-compose.prod.yml rm -f clickhouse-init 2>/dev/null || true
+            if [ $MIGRATION_EXIT_CODE -ne 0 ]; then
+              echo "Warning: Migrations may have failed or already applied (exit code: $MIGRATION_EXIT_CODE)"
+              # Не останавливаем деплой, так как миграции могут быть уже применены
+            else
+              echo "Migrations completed successfully"
+            fi
+            # Деплоим indexer-orchestrator
+            docker compose -f docker-compose.prod.yml down indexer-orchestrator
+            docker compose -f docker-compose.prod.yml up -d indexer-orchestrator
+            docker compose -f docker-compose.prod.yml logs --tail=50 indexer-orchestrator
+
+      - name: Health check
+        if: github.ref == 'refs/heads/main'
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          script: |
+            sleep 10
+            cd ${{ secrets.DEPLOY_PATH }}
+            docker compose -f docker-compose.prod.yml ps indexer-orchestrator
+            # Health check через проверку процесса (как в Dockerfile)
+            docker compose -f docker-compose.prod.yml exec -T indexer-orchestrator sh -c "pgrep -f platform-indexer-orchestrator > /dev/null || exit 1" || {
+              echo "Health check failed: process not running"
+              docker compose -f docker-compose.prod.yml logs --tail=100 indexer-orchestrator
+              exit 1
+            }
+            echo "Health check passed"
+
